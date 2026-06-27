@@ -1,4 +1,4 @@
-# Q-Queue
+# QueueQ
 
 A responsive React app for badminton, pickleball, and similar court queues.
 

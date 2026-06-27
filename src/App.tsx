@@ -621,7 +621,7 @@ function App() {
         <div className="hero-copy">
           <div className="brand-pill">
             <Swords size={18} />
-            Q-Queue
+            QueueQ
           </div>
           <h1>Run fair court rotations without the clipboard chaos.</h1>
           <p>
