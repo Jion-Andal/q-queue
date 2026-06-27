@@ -168,6 +168,10 @@ function localSessionKey(sessionId: string) {
   return `q-queue-session-${sessionId}`
 }
 
+function localPlayerKey(sessionId: string) {
+  return `q-queue-player-${sessionId}`
+}
+
 function saveLocalSession(session: Session) {
   localStorage.setItem(localSessionKey(session.id), JSON.stringify(session))
 }
@@ -223,6 +227,7 @@ function App() {
   const [joinName, setJoinName] = useState('')
   const [joinSkill, setJoinSkill] = useState<Skill>('Moderate')
   const [joinIcon, setJoinIcon] = useState(cuteIcons[0].icon)
+  const [joinedPlayerId, setJoinedPlayerId] = useState('')
   const [notice, setNotice] = useState('')
   const [noticeTone, setNoticeTone] = useState<'info' | 'error'>('info')
   const [sessionCodeError, setSessionCodeError] = useState('')
@@ -278,6 +283,7 @@ function App() {
         if (loaded) {
           setSession(loaded)
           setSessionIdInput(loaded.id)
+          setJoinedPlayerId(localStorage.getItem(localPlayerKey(loaded.id)) ?? '')
           saveLocalSession(loaded)
         } else {
           setSessionCodeError('Session not found yet. Ask the host to confirm the code.')
@@ -287,6 +293,7 @@ function App() {
         const local = readLocalSession(initialSessionId)
         if (local) {
           setSession(local)
+          setJoinedPlayerId(localStorage.getItem(localPlayerKey(local.id)) ?? '')
         }
         setDbWarning(
           error instanceof Error
@@ -321,6 +328,7 @@ function App() {
     const next = createSession(setupMode, initialGroups, hostName.trim())
     setSession(next)
     setRole('host')
+    setJoinedPlayerId('')
     setNotice('')
     setNoticeTone('info')
     window.history.replaceState(null, '', getHostUrl(next.id))
@@ -340,6 +348,7 @@ function App() {
   async function openSession() {
     if (!sessionIdInput.trim()) {
       setSession(null)
+      setJoinedPlayerId('')
       setSessionCodeError('Enter a session code to join.')
       return
     }
@@ -352,14 +361,17 @@ function App() {
       const loaded = await loadSession(code)
       if (loaded) {
         setSession(loaded)
+        setJoinedPlayerId(localStorage.getItem(localPlayerKey(loaded.id)) ?? '')
         setNotice('')
         setNoticeTone('info')
       } else {
         setSession(null)
+        setJoinedPlayerId('')
         setSessionCodeError('Invalid session code. Check the code and try again.')
       }
     } catch (error) {
       setSession(null)
+      setJoinedPlayerId('')
       setSessionCodeError('Unable to validate that session code. Please try again.')
       setDbWarning(
         error instanceof Error
@@ -384,6 +396,8 @@ function App() {
       ...current,
       players: [...current.players, player],
     }))
+    localStorage.setItem(localPlayerKey(session.id), player.id)
+    setJoinedPlayerId(player.id)
     setJoinName('')
     setJoinIcon(cuteIcons[0].icon)
     setNoticeTone('info')
@@ -551,6 +565,7 @@ function App() {
     }))
     setSession(null)
     setRole('host')
+    setJoinedPlayerId('')
     setNoticeTone('info')
     setNotice('Session terminated. You can create a new session now.')
     setSessionCodeError('')
@@ -562,6 +577,8 @@ function App() {
     role === 'join'
       ? session?.matches.filter((match) => match.status === 'queued') ?? []
       : session?.matches ?? []
+  const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
+  const joinedGroup = joinedPlayer?.groupId ? groupById.get(joinedPlayer.groupId) : undefined
 
   return (
     <main className="app-shell">
@@ -694,7 +711,7 @@ function App() {
             </div>
           </header>
 
-          {role === 'join' && (
+          {role === 'join' && !joinedPlayerId && (
             <div className="panel join-panel">
               <div className="section-title">
                 <UserPlus size={22} />
@@ -755,27 +772,41 @@ function App() {
             </div>
           )}
 
-          {role === 'join' && (
+          {role === 'join' && joinedPlayerId && (
             <section className="panel player-teams-panel">
               <div className="section-title">
                 <Users size={22} />
                 <div>
-                  <p className="eyebrow">Teams</p>
-                  <h2>Your session teams</h2>
+                  <p className="eyebrow">Your team</p>
+                  <h2>{joinedGroup ? joinedGroup.name : 'Waiting for assignment'}</h2>
                 </div>
               </div>
-              <div className="teams-grid player-teams-grid">
-                {session.groups.map((group) => (
-                  <article className="team-card" key={group.id}>
+              {!joinedPlayer ? (
+                <p className="empty">You are checked in. Waiting for the host to sync your player card.</p>
+              ) : !joinedGroup ? (
+                <div className="waiting-card">
+                  <div className="player-identity">
+                    <span className="player-icon" aria-hidden="true">
+                      {joinedPlayer.icon ?? '🐼'}
+                    </span>
+                    <span>
+                      <strong>{joinedPlayer.name}</strong>
+                      <small>{joinedPlayer.skill}</small>
+                    </span>
+                  </div>
+                  <p>The host will assign you to a team soon.</p>
+                </div>
+              ) : (
+                <div className="teams-grid player-teams-grid">
+                  <article className="team-card" key={joinedGroup.id}>
                     <div className="team-card-header">
-                      <h3>{group.name}</h3>
+                      <h3>{joinedGroup.name}</h3>
                     </div>
                     <p className="team-meta">
-                      {group.playerIds.length}/{session.mode === 'doubles' ? 2 : 1} players
+                      {joinedGroup.playerIds.length}/{session.mode === 'doubles' ? 2 : 1} players
                     </p>
                     <div className="roster">
-                      {group.playerIds.length === 0 && <span className="empty">No players yet</span>}
-                      {group.playerIds.map((playerId) => {
+                      {joinedGroup.playerIds.map((playerId) => {
                         const player = playerById.get(playerId)
                         if (!player) return null
                         return (
@@ -794,8 +825,8 @@ function App() {
                       })}
                     </div>
                   </article>
-                ))}
-              </div>
+                </div>
+              )}
             </section>
           )}
 
@@ -940,6 +971,7 @@ function App() {
             </div>
           )}
 
+          {(role === 'host' || joinedPlayerId) && (
           <section className={role === 'join' ? 'player-session-stack' : 'match-and-stats'}>
             <div className="panel matches-panel">
               <div className="section-title">
@@ -1051,6 +1083,7 @@ function App() {
               </div>
             </div>
           </section>
+          )}
         </section>
       )}
     </main>

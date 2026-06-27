@@ -537,6 +537,20 @@ small {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.waiting-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  color: #536080;
+  background: #f6f8ff;
+}
+
+.waiting-card p {
+  margin: 0;
+  font-weight: 800;
+}
+
 .roster-row.compact {
   justify-content: flex-start;
 }
