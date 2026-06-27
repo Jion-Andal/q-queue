@@ -117,9 +117,22 @@ function createSession(mode: Mode, groupCount: number, hostName: string): Sessio
     expiresAt: expiresAt.toISOString(),
     isTerminated: false,
     players: [],
-    groups: createGroups(groupCount),
+    groups: mode === 'doubles' ? createGroups(groupCount) : [],
     matches: [],
   }
+}
+
+function createSinglesCompetitors(players: Player[]) {
+  return players.map((player) => ({
+    id: player.id,
+    name: player.name,
+    playerIds: [player.id],
+  }))
+}
+
+function createCompetitorMap(session: Session) {
+  const competitors = session.mode === 'singles' ? createSinglesCompetitors(session.players) : session.groups
+  return new Map(competitors.map((competitor) => [competitor.id, competitor]))
 }
 
 function buildRoundRobin(groups: Group[]) {
@@ -240,17 +253,15 @@ function App() {
   const joinUrl = session ? getJoinUrl(session.id) : ''
   const sessionId = session?.id
 
-  const groupById = useMemo(() => {
-    const map = new Map<string, Group>()
-    session?.groups.forEach((group) => map.set(group.id, group))
-    return map
-  }, [session?.groups])
-
   const playerById = useMemo(() => {
     const map = new Map<string, Player>()
     session?.players.forEach((player) => map.set(player.id, player))
     return map
   }, [session?.players])
+
+  const competitorById = useMemo(() => {
+    return session ? createCompetitorMap(session) : new Map<string, Group>()
+  }, [session])
 
   const updateSession = useCallback(async (recipe: (current: Session) => Session) => {
     if (!session) return
@@ -405,6 +416,18 @@ function App() {
   }
 
   function assignPlayer(playerId: string, groupId: string) {
+    const targetGroup = session?.groups.find((group) => group.id === groupId)
+    if (
+      session?.mode === 'doubles' &&
+      targetGroup &&
+      !targetGroup.playerIds.includes(playerId) &&
+      targetGroup.playerIds.length >= 2
+    ) {
+      setNoticeTone('error')
+      setNotice(`${targetGroup.name} already has 2 players.`)
+      return
+    }
+
     updateSession((current) => ({
       ...current,
       players: current.players.map((player) =>
@@ -484,28 +507,14 @@ function App() {
 
   function generateSchedule() {
     updateSession((current) => {
-      const matches = buildRoundRobin(current.groups)
+      const competitors =
+        current.mode === 'singles' ? createSinglesCompetitors(current.players) : current.groups
+      const matches = buildRoundRobin(competitors)
       return {
         ...current,
         matches,
         activeMatchId: matches[0]?.id,
       }
-    })
-  }
-
-  function swapMatch(matchId: string, direction: -1 | 1) {
-    updateSession((current) => {
-      const matches = [...current.matches]
-      const index = matches.findIndex((match) => match.id === matchId)
-      const target = index + direction
-      if (index < 0 || target < 0 || target >= matches.length) return current
-
-      const currentRound = matches[index].round
-      matches[index].round = matches[target].round
-      matches[target].round = currentRound
-      ;[matches[index], matches[target]] = [matches[target], matches[index]]
-
-      return { ...current, matches }
     })
   }
 
@@ -515,8 +524,9 @@ function App() {
       if (!match || match.status === 'finished') return current
 
       const loserId = match.teamAId === winnerId ? match.teamBId : match.teamAId
-      const winnerPlayers = groupById.get(winnerId)?.playerIds ?? []
-      const loserPlayers = groupById.get(loserId)?.playerIds ?? []
+      const currentCompetitors = createCompetitorMap(current)
+      const winnerPlayers = currentCompetitors.get(winnerId)?.playerIds ?? []
+      const loserPlayers = currentCompetitors.get(loserId)?.playerIds ?? []
 
       const players = current.players.map((player) => {
         if (winnerPlayers.includes(player.id)) {
@@ -572,13 +582,21 @@ function App() {
     window.history.replaceState(null, '', window.location.pathname)
   }
 
-  const unassignedPlayers = session?.players.filter((player) => !player.groupId) ?? []
+  const hostWaitingPlayers =
+    session?.mode === 'singles' ? session.players : session?.players.filter((player) => !player.groupId) ?? []
   const displayedMatches =
     role === 'join'
       ? session?.matches.filter((match) => match.status === 'queued') ?? []
       : session?.matches ?? []
   const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
-  const joinedGroup = joinedPlayer?.groupId ? groupById.get(joinedPlayer.groupId) : undefined
+  const joinedGroup =
+    session?.mode === 'singles'
+      ? joinedPlayer
+        ? competitorById.get(joinedPlayer.id)
+        : undefined
+      : joinedPlayer?.groupId
+        ? competitorById.get(joinedPlayer.groupId)
+        : undefined
 
   return (
     <main className="app-shell">
@@ -646,16 +664,18 @@ function App() {
               </button>
             </div>
 
-            <label className="field">
-              Initial number of teams
-              <input
-                min={2}
-                max={16}
-                type="number"
-                value={initialGroups}
-                onChange={(event) => setInitialGroups(Number(event.target.value))}
-              />
-            </label>
+            {setupMode === 'doubles' && (
+              <label className="field">
+                Initial number of teams
+                <input
+                  min={2}
+                  max={16}
+                  type="number"
+                  value={initialGroups}
+                  onChange={(event) => setInitialGroups(Number(event.target.value))}
+                />
+              </label>
+            )}
 
             <button className="primary-button" type="button" onClick={startSession}>
               Create session
@@ -777,7 +797,7 @@ function App() {
               <div className="section-title">
                 <Users size={22} />
                 <div>
-                  <p className="eyebrow">Your team</p>
+                  <p className="eyebrow">{session.mode === 'singles' ? 'Your player card' : 'Your team'}</p>
                   <h2>{joinedGroup ? joinedGroup.name : 'Waiting for assignment'}</h2>
                 </div>
               </div>
@@ -794,7 +814,11 @@ function App() {
                       <small>{joinedPlayer.skill}</small>
                     </span>
                   </div>
-                  <p>The host will assign you to a team soon.</p>
+                  <p>
+                    {session.mode === 'singles'
+                      ? 'You are checked in and ready for singles scheduling.'
+                      : 'The host will assign you to a team soon.'}
+                  </p>
                 </div>
               ) : (
                 <div className="teams-grid player-teams-grid">
@@ -803,7 +827,9 @@ function App() {
                       <h3>{joinedGroup.name}</h3>
                     </div>
                     <p className="team-meta">
-                      {joinedGroup.playerIds.length}/{session.mode === 'doubles' ? 2 : 1} players
+                      {session.mode === 'singles'
+                        ? 'Singles competitor'
+                        : `${joinedGroup.playerIds.length}/2 players`}
                     </p>
                     <div className="roster">
                       {joinedGroup.playerIds.map((playerId) => {
@@ -859,27 +885,31 @@ function App() {
 
               <div className="main-stack">
                 <div className="toolbar panel">
-                  <button className="secondary-button" type="button" onClick={addGroup}>
-                    <CirclePlus size={16} />
-                    Add team
-                  </button>
+                  {session.mode === 'doubles' && (
+                    <button className="secondary-button" type="button" onClick={addGroup}>
+                      <CirclePlus size={16} />
+                      Add team
+                    </button>
+                  )}
                   <button className="primary-button" type="button" onClick={generateSchedule}>
                     <Shuffle size={16} />
                     Generate round robin
                   </button>
                 </div>
 
-                {unassignedPlayers.length > 0 && (
+                {hostWaitingPlayers.length > 0 && (
                   <div className="panel">
                     <div className="section-title">
                       <Users size={22} />
                       <div>
-                        <p className="eyebrow">Waiting room</p>
-                        <h2>Assign players</h2>
+                        <p className="eyebrow">
+                          {session.mode === 'singles' ? 'Singles players' : 'Waiting room'}
+                        </p>
+                        <h2>{session.mode === 'singles' ? 'Checked-in players' : 'Assign players'}</h2>
                       </div>
                     </div>
                     <div className="player-list">
-                      {unassignedPlayers.map((player) => (
+                      {hostWaitingPlayers.map((player) => (
                         <div className="player-chip" key={player.id}>
                           <div className="player-identity">
                             <span className="player-icon" aria-hidden="true">
@@ -890,83 +920,93 @@ function App() {
                               <small>{player.skill}</small>
                             </span>
                           </div>
-                          <select
-                            value=""
-                            onChange={(event) => assignPlayer(player.id, event.target.value)}
-                          >
-                            <option value="" disabled>
-                              Send to team
-                            </option>
-                            {session.groups.map((group) => (
-                              <option key={group.id} value={group.id}>
-                                {group.name}
+                          {session.mode === 'doubles' && (
+                            <select
+                              value=""
+                              onChange={(event) => assignPlayer(player.id, event.target.value)}
+                            >
+                              <option value="" disabled>
+                                Send to team
                               </option>
-                            ))}
-                          </select>
+                              {session.groups.map((group) => (
+                                <option
+                                  disabled={group.playerIds.length >= 2}
+                                  key={group.id}
+                                  value={group.id}
+                                >
+                                  {group.name}
+                                  {group.playerIds.length >= 2 ? ' (full)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                <div className="teams-grid">
-                  {session.groups.map((group) => (
-                    <article className="team-card" key={group.id}>
-                      <div className="team-card-header">
-                        <h3>{group.name}</h3>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={() => removeGroup(group.id)}
-                          aria-label={`Remove ${group.name}`}
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                      <p className="team-meta">
-                        {group.playerIds.length}/{session.mode === 'doubles' ? 2 : 1} suggested
-                      </p>
-                      <div className="roster">
-                        {group.playerIds.length === 0 && <span className="empty">No players yet</span>}
-                        {group.playerIds.map((playerId, index) => {
-                          const player = playerById.get(playerId)
-                          if (!player) return null
-                          return (
-                            <div className="roster-row" key={playerId}>
-                              <div className="player-identity">
-                                <span className="player-icon" aria-hidden="true">
-                                  {player.icon ?? '🐼'}
-                                </span>
-                                <span>
-                                  <strong>{player.name}</strong>
-                                  <small>{player.skill}</small>
-                                </span>
-                              </div>
-                              <div className="roster-actions">
-                                {session.mode === 'doubles' && index > 0 && (
+                {session.mode === 'doubles' && (
+                  <div className="teams-grid">
+                    {session.groups.map((group) => (
+                      <article className="team-card" key={group.id}>
+                        <div className="team-card-header">
+                          <h3>{group.name}</h3>
+                          <button
+                            className="icon-button"
+                            type="button"
+                            onClick={() => removeGroup(group.id)}
+                            aria-label={`Remove ${group.name}`}
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                        <p className="team-meta">
+                          {group.playerIds.length}/2 players
+                          {group.playerIds.length >= 2 ? ' - full' : ''}
+                        </p>
+                        <div className="roster">
+                          {group.playerIds.length === 0 && <span className="empty">No players yet</span>}
+                          {group.playerIds.map((playerId, index) => {
+                            const player = playerById.get(playerId)
+                            if (!player) return null
+                            return (
+                              <div className="roster-row" key={playerId}>
+                                <div className="player-identity">
+                                  <span className="player-icon" aria-hidden="true">
+                                    {player.icon ?? '🐼'}
+                                  </span>
+                                  <span>
+                                    <strong>{player.name}</strong>
+                                    <small>{player.skill}</small>
+                                  </span>
+                                </div>
+                                <div className="roster-actions">
+                                  {index > 0 && (
+                                    <button
+                                      className="tiny-button"
+                                      type="button"
+                                      onClick={() => swapPlayers(group.id, index, index - 1)}
+                                    >
+                                      Up
+                                    </button>
+                                  )}
                                   <button
                                     className="tiny-button"
                                     type="button"
-                                    onClick={() => swapPlayers(group.id, index, index - 1)}
+                                    onClick={() => removePlayerFromGroup(playerId)}
                                   >
-                                    Up
+                                    Remove
                                   </button>
-                                )}
-                                <button
-                                  className="tiny-button"
-                                  type="button"
-                                  onClick={() => removePlayerFromGroup(playerId)}
-                                >
-                                  Remove
-                                </button>
+                                </div>
                               </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                            )
+                          })}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -990,8 +1030,8 @@ function App() {
               ) : (
                 <div className="match-list">
                   {displayedMatches.map((match, index) => {
-                    const teamA = groupById.get(match.teamAId)
-                    const teamB = groupById.get(match.teamBId)
+                    const teamA = competitorById.get(match.teamAId)
+                    const teamB = competitorById.get(match.teamBId)
                     const isActive = match.id === session.activeMatchId
 
                     return (
@@ -999,28 +1039,13 @@ function App() {
                         <div className="match-info">
                           <span className="round-label">Game {index + 1}</span>
                           <strong>
-                            {teamA?.name ?? 'Team A'} vs {teamB?.name ?? 'Team B'}
+                            {teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A')} vs{' '}
+                            {teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B')}
                           </strong>
                           <small>{match.status === 'finished' ? 'Finished' : 'Queued'}</small>
                         </div>
                         {role === 'host' && (
                           <div className="match-actions">
-                            <button
-                              className="tiny-button"
-                              type="button"
-                              disabled={index === 0}
-                              onClick={() => swapMatch(match.id, -1)}
-                            >
-                              Up
-                            </button>
-                            <button
-                              className="tiny-button"
-                              type="button"
-                              disabled={index === session.matches.length - 1}
-                              onClick={() => swapMatch(match.id, 1)}
-                            >
-                              Down
-                            </button>
                             {match.status !== 'finished' && (
                               <>
                                 <button
@@ -1044,7 +1069,7 @@ function App() {
                         {match.status === 'finished' && (
                           <span className="winner">
                             <CheckCircle2 size={15} />
-                            {groupById.get(match.winnerId ?? '')?.name} won
+                            {competitorById.get(match.winnerId ?? '')?.name} won
                           </span>
                         )}
                       </article>
