@@ -519,6 +519,54 @@ small {
   padding: 18px;
 }
 
+.team-accordion {
+  padding: 0;
+}
+
+.team-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 18px;
+  cursor: pointer;
+  color: #151a39;
+  font-weight: 900;
+  list-style: none;
+}
+
+.team-summary::-webkit-details-marker {
+  display: none;
+}
+
+.team-summary::after {
+  content: '+';
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  color: #5466ff;
+  background: #eef1ff;
+}
+
+.team-accordion[open] .team-summary::after {
+  content: '-';
+}
+
+.team-count {
+  margin-left: auto;
+  color: #7b83a5;
+  font-size: 0.9rem;
+}
+
+.team-details {
+  display: grid;
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
 .team-card h3 {
   margin: 0;
   color: #151a39;

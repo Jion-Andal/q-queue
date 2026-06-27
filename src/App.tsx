@@ -13,7 +13,6 @@ import {
   Trophy,
   UserPlus,
   Users,
-  X,
 } from 'lucide-react'
 import './App.css'
 
@@ -492,19 +491,6 @@ function App() {
     }))
   }
 
-  function swapPlayers(groupId: string, fromIndex: number, toIndex: number) {
-    updateSession((current) => ({
-      ...current,
-      groups: current.groups.map((group) => {
-        if (group.id !== groupId) return group
-        const playerIds = [...group.playerIds]
-        const [playerId] = playerIds.splice(fromIndex, 1)
-        playerIds.splice(toIndex, 0, playerId)
-        return { ...group, playerIds }
-      }),
-    }))
-  }
-
   function generateSchedule() {
     updateSession((current) => {
       const competitors =
@@ -949,61 +935,53 @@ function App() {
                 {session.mode === 'doubles' && (
                   <div className="teams-grid">
                     {session.groups.map((group) => (
-                      <article className="team-card" key={group.id}>
-                        <div className="team-card-header">
-                          <h3>{group.name}</h3>
+                      <details className="team-card team-accordion" key={group.id}>
+                        <summary className="team-summary">
+                          <span>{group.name}</span>
+                          <span className="team-count">
+                            {group.playerIds.length}/2 players
+                            {group.playerIds.length >= 2 ? ' - full' : ''}
+                          </span>
+                        </summary>
+                        <div className="team-details">
                           <button
-                            className="icon-button"
+                            className="danger-button"
                             type="button"
                             onClick={() => removeGroup(group.id)}
-                            aria-label={`Remove ${group.name}`}
                           >
-                            <X size={16} />
+                            Remove {group.name}
                           </button>
-                        </div>
-                        <p className="team-meta">
-                          {group.playerIds.length}/2 players
-                          {group.playerIds.length >= 2 ? ' - full' : ''}
-                        </p>
-                        <div className="roster">
-                          {group.playerIds.length === 0 && <span className="empty">No players yet</span>}
-                          {group.playerIds.map((playerId, index) => {
-                            const player = playerById.get(playerId)
-                            if (!player) return null
-                            return (
-                              <div className="roster-row" key={playerId}>
-                                <div className="player-identity">
-                                  <span className="player-icon" aria-hidden="true">
-                                    {player.icon ?? '🐼'}
-                                  </span>
-                                  <span>
-                                    <strong>{player.name}</strong>
-                                    <small>{player.skill}</small>
-                                  </span>
-                                </div>
-                                <div className="roster-actions">
-                                  {index > 0 && (
+                          <div className="roster">
+                            {group.playerIds.length === 0 && <span className="empty">No players yet</span>}
+                            {group.playerIds.map((playerId) => {
+                              const player = playerById.get(playerId)
+                              if (!player) return null
+                              return (
+                                <div className="roster-row" key={playerId}>
+                                  <div className="player-identity">
+                                    <span className="player-icon" aria-hidden="true">
+                                      {player.icon ?? '🐼'}
+                                    </span>
+                                    <span>
+                                      <strong>{player.name}</strong>
+                                      <small>{player.skill}</small>
+                                    </span>
+                                  </div>
+                                  <div className="roster-actions">
                                     <button
                                       className="tiny-button"
                                       type="button"
-                                      onClick={() => swapPlayers(group.id, index, index - 1)}
+                                      onClick={() => removePlayerFromGroup(playerId)}
                                     >
-                                      Up
+                                      Remove
                                     </button>
-                                  )}
-                                  <button
-                                    className="tiny-button"
-                                    type="button"
-                                    onClick={() => removePlayerFromGroup(playerId)}
-                                  >
-                                    Remove
-                                  </button>
+                                  </div>
                                 </div>
-                              </div>
-                            )
-                          })}
+                              )
+                            })}
+                          </div>
                         </div>
-                      </article>
+                      </details>
                     ))}
                   </div>
                 )}
