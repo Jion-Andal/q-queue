@@ -1104,9 +1104,9 @@ function App() {
                       </span>
                     </div>
                     <div className="stat-pills">
-                      <span>{player.stats.played} GP</span>
-                      <span>{player.stats.wins} W</span>
-                      <span>{player.stats.losses} L</span>
+                      <span className="stat-pill games">{player.stats.played} Games</span>
+                      <span className="stat-pill wins">{player.stats.wins} W</span>
+                      <span className="stat-pill losses">{player.stats.losses} L</span>
                     </div>
                   </div>
                 ))}

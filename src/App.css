@@ -682,15 +682,28 @@ small {
   flex-wrap: wrap;
 }
 
-.stat-pills span {
+.stat-pill {
   min-width: 44px;
   padding: 7px 8px;
   border-radius: 999px;
-  color: #24305f;
-  background: #ffffff;
   font-size: 0.82rem;
   font-weight: 900;
   text-align: center;
+}
+
+.stat-pill.games {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.stat-pill.wins {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.stat-pill.losses {
+  color: #991b1b;
+  background: #fee2e2;
 }
 
 @media (max-width: 980px) {
