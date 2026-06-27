@@ -29,7 +29,6 @@
 }
 
 .brand-pill,
-.status,
 .round-label,
 .winner {
   display: inline-flex;
@@ -196,7 +195,6 @@
 
 .choice-row,
 .toolbar,
-.header-actions,
 .match-actions,
 .roster-actions {
   display: flex;
@@ -351,6 +349,45 @@ button:disabled {
   background: #ffe5ec;
 }
 
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(17, 23, 53, 0.48);
+  backdrop-filter: blur(8px);
+}
+
+.confirmation-modal {
+  display: grid;
+  width: min(440px, 100%);
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid rgba(24, 33, 83, 0.12);
+  border-radius: 26px;
+  color: #29314f;
+  background: #ffffff;
+  box-shadow: 0 24px 90px rgba(17, 23, 53, 0.28);
+}
+
+.confirmation-modal h2,
+.confirmation-modal p {
+  margin: 0;
+}
+
+.confirmation-modal h2 {
+  color: #151a39;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .dashboard {
   display: grid;
   gap: 18px;
@@ -381,18 +418,6 @@ button:disabled {
 
 .session-header .eyebrow {
   color: rgba(255, 255, 255, 0.68);
-}
-
-.status {
-  padding: 9px 12px;
-  border-radius: 999px;
-  color: #15204b;
-  background: #d9fff2;
-  font-weight: 900;
-}
-
-.status.closed {
-  background: #ffe2e9;
 }
 
 .invite-card {
@@ -646,10 +671,18 @@ small {
 
 .stat-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 
-.stat-row span {
+.stat-pills {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.stat-pills span {
   min-width: 44px;
   padding: 7px 8px;
   border-radius: 999px;
@@ -697,14 +730,12 @@ small {
     flex-direction: column;
   }
 
-  .header-actions,
   .toolbar,
   .match-actions,
   .roster-actions {
     width: 100%;
   }
 
-  .header-actions > *,
   .toolbar > *,
   .match-actions > *,
   .roster-actions > * {
@@ -716,6 +747,12 @@ small {
   }
 
   .stat-row {
-    grid-template-columns: 1fr repeat(3, auto);
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .stat-pills {
+    justify-content: flex-start;
+    padding-left: 50px;
   }
 }

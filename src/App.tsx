@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { createClient } from '@supabase/supabase-js'
 import {
-  CalendarClock,
   CheckCircle2,
   CirclePlus,
   Copy,
@@ -70,6 +69,13 @@ type SessionRow = {
   id: string
   payload: Session
   expires_at: string
+}
+
+type Confirmation = {
+  title: string
+  message: string
+  confirmLabel: string
+  action: () => void | Promise<void>
 }
 
 const skills: Skill[] = ['Advanced', 'Moderate', 'Beginner']
@@ -151,15 +157,6 @@ function buildRoundRobin(groups: Group[]) {
   }
 
   return matches
-}
-
-function formatRemaining(expiresAt: string) {
-  const remaining = new Date(expiresAt).getTime() - Date.now()
-  if (remaining <= 0) return 'Expired'
-
-  const hours = Math.floor(remaining / (60 * 60 * 1000))
-  const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
-  return `${hours}h ${minutes}m left`
 }
 
 function getJoinUrl(sessionId: string) {
@@ -244,6 +241,7 @@ function App() {
   const [noticeTone, setNoticeTone] = useState<'info' | 'error'>('info')
   const [sessionCodeError, setSessionCodeError] = useState('')
   const [dbWarning, setDbWarning] = useState('')
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [now, setNow] = useState(Date.now())
 
   const isExpired = session ? new Date(session.expiresAt).getTime() <= now : false
@@ -454,6 +452,15 @@ function App() {
     }))
   }
 
+  function requestRemovePlayerFromGroup(player: Player) {
+    setConfirmation({
+      title: 'Remove player?',
+      message: `Remove ${player.name} from their current team? They will go back to the waiting room.`,
+      confirmLabel: 'Remove player',
+      action: () => removePlayerFromGroup(player.id),
+    })
+  }
+
   function addGroup() {
     updateSession((current) => ({
       ...current,
@@ -489,6 +496,15 @@ function App() {
           ? current.activeMatchId
           : undefined,
     }))
+  }
+
+  function requestRemoveGroup(group: Group) {
+    setConfirmation({
+      title: 'Remove team?',
+      message: `Remove ${group.name}? Its players will go back to the waiting room and related matches will be removed.`,
+      confirmLabel: 'Remove team',
+      action: () => removeGroup(group.id),
+    })
   }
 
   function generateSchedule() {
@@ -566,6 +582,21 @@ function App() {
     setNotice('Session terminated. You can create a new session now.')
     setSessionCodeError('')
     window.history.replaceState(null, '', window.location.pathname)
+  }
+
+  function requestTerminateSession() {
+    setConfirmation({
+      title: 'Terminate session?',
+      message: 'This will close the current session for everyone. You can create a new session after terminating.',
+      confirmLabel: 'Terminate session',
+      action: terminateSession,
+    })
+  }
+
+  async function confirmDestructiveAction() {
+    const action = confirmation?.action
+    setConfirmation(null)
+    await action?.()
   }
 
   const hostWaitingPlayers =
@@ -708,12 +739,6 @@ function App() {
               <p className="eyebrow">Session {session.id}</p>
               <h2>{session.mode === 'doubles' ? 'Doubles' : 'Singles'} round robin</h2>
               <p className="host-name">Hosted by {session.hostName || 'Host'}</p>
-            </div>
-            <div className="header-actions">
-              <span className={isClosed ? 'status closed' : 'status'}>
-                <CalendarClock size={16} />
-                {session.isTerminated ? 'Terminated' : formatRemaining(session.expiresAt)}
-              </span>
             </div>
           </header>
 
@@ -864,7 +889,7 @@ function App() {
                   <Copy size={16} />
                   Copy invite link
                 </button>
-                <button className="danger-button" type="button" onClick={terminateSession}>
+                <button className="danger-button" type="button" onClick={requestTerminateSession}>
                   Terminate session
                 </button>
               </aside>
@@ -947,7 +972,7 @@ function App() {
                           <button
                             className="danger-button"
                             type="button"
-                            onClick={() => removeGroup(group.id)}
+                            onClick={() => requestRemoveGroup(group)}
                           >
                             Remove {group.name}
                           </button>
@@ -971,7 +996,7 @@ function App() {
                                     <button
                                       className="tiny-button"
                                       type="button"
-                                      onClick={() => removePlayerFromGroup(playerId)}
+                                      onClick={() => requestRemovePlayerFromGroup(player)}
                                     >
                                       Remove
                                     </button>
@@ -1078,9 +1103,11 @@ function App() {
                         <small>{player.skill}</small>
                       </span>
                     </div>
-                    <span>{player.stats.played} GP</span>
-                    <span>{player.stats.wins} W</span>
-                    <span>{player.stats.losses} L</span>
+                    <div className="stat-pills">
+                      <span>{player.stats.played} GP</span>
+                      <span>{player.stats.wins} W</span>
+                      <span>{player.stats.losses} L</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1088,6 +1115,35 @@ function App() {
           </section>
           )}
         </section>
+      )}
+      {confirmation && (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            aria-describedby="confirmation-message"
+            aria-labelledby="confirmation-title"
+            aria-modal="true"
+            className="confirmation-modal"
+            role="dialog"
+          >
+            <div>
+              <p className="eyebrow">Please confirm</p>
+              <h2 id="confirmation-title">{confirmation.title}</h2>
+            </div>
+            <p id="confirmation-message">{confirmation.message}</p>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setConfirmation(null)}
+              >
+                Cancel
+              </button>
+              <button className="danger-button" type="button" onClick={confirmDestructiveAction}>
+                {confirmation.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )
