@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { createClient } from '@supabase/supabase-js'
 import {
@@ -21,8 +21,9 @@ const supabase = createClient(
 )
 
 type Mode = 'singles' | 'doubles'
-type Skill = 'Advanced' | 'Moderate' | 'Beginner'
+type Skill = 'Advanced' | 'Intermediate' | 'Beginner'
 type MatchStatus = 'queued' | 'finished'
+type SessionTab = 'playerCards' | 'matchQueue' | 'playerTally'
 
 type Player = {
   id: string
@@ -46,6 +47,7 @@ type Group = {
 type Match = {
   id: string
   round: number
+  courtNumber: number
   teamAId: string
   teamBId: string
   status: MatchStatus
@@ -59,6 +61,7 @@ type Session = {
   createdAt: string
   expiresAt: string
   isTerminated: boolean
+  courtCount: number
   players: Player[]
   groups: Group[]
   matches: Match[]
@@ -78,7 +81,7 @@ type Confirmation = {
   action: () => void | Promise<void>
 }
 
-const skills: Skill[] = ['Advanced', 'Moderate', 'Beginner']
+const skills: Skill[] = ['Advanced', 'Intermediate', 'Beginner']
 const cuteIcons = [
   { icon: '🐼', label: 'Panda' },
   { icon: '🐱', label: 'Cat' },
@@ -125,7 +128,20 @@ function ensureGroupCapacity(groups: Group[], playerCount: number) {
   return nextGroups
 }
 
-function createSession(mode: Mode, groupCount: number, hostName: string): Session {
+function clampCourtCount(value: number) {
+  return Math.min(Math.max(Math.trunc(value) || 1, 1), 12)
+}
+
+function assignCourtNumbers(matches: Match[], courtCount: number) {
+  const availableCourts = clampCourtCount(courtCount)
+  return matches.map((match, index) => ({
+    ...match,
+    round: index + 1,
+    courtNumber: (index % availableCourts) + 1,
+  }))
+}
+
+function createSession(mode: Mode, groupCount: number, courtCount: number, hostName: string): Session {
   const createdAt = new Date()
   const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000)
 
@@ -136,6 +152,7 @@ function createSession(mode: Mode, groupCount: number, hostName: string): Sessio
     createdAt: createdAt.toISOString(),
     expiresAt: expiresAt.toISOString(),
     isTerminated: false,
+    courtCount: clampCourtCount(courtCount),
     players: [],
     groups: mode === 'doubles' ? createGroups(groupCount) : [],
     matches: [],
@@ -155,9 +172,15 @@ function createCompetitorMap(session: Session) {
   return new Map(competitors.map((competitor) => [competitor.id, competitor]))
 }
 
+function createMatchableCompetitors(session: Session) {
+  return session.mode === 'singles'
+    ? createSinglesCompetitors(session.players)
+    : session.groups.filter((group) => group.playerIds.length > 0)
+}
+
 function skillScore(skill: Skill) {
   if (skill === 'Advanced') return 3
-  if (skill === 'Moderate') return 2
+  if (skill === 'Intermediate') return 2
   return 1
 }
 
@@ -212,8 +235,23 @@ function autoAssignDoublesPlayer(session: Session, player: Player) {
   return createBalancedDoublesGroups(players, session.groups)
 }
 
-function buildRoundRobin(groups: Group[]) {
+function buildBalancedMatchQueue(groups: Group[], players: Player[], courtCount: number) {
   const playableGroups = groups.filter((group) => group.playerIds.length > 0)
+  const playersById = new Map(players.map((player) => [player.id, player]))
+  const profiles = new Map(
+    playableGroups.map((group) => {
+      const groupPlayers = group.playerIds
+        .map((playerId) => playersById.get(playerId))
+        .filter((player): player is Player => Boolean(player))
+      const divisor = Math.max(groupPlayers.length, 1)
+      const wins = groupPlayers.reduce((total, player) => total + player.stats.wins, 0) / divisor
+      const losses = groupPlayers.reduce((total, player) => total + player.stats.losses, 0) / divisor
+      const skill = groupPlayers.reduce((total, player) => total + skillScore(player.skill), 0) / divisor
+      const strength = wins * 2 - losses + skill * 3
+
+      return [group.id, { strength, wins, skill }] as const
+    }),
+  )
   const matches: Match[] = []
 
   for (let index = 0; index < playableGroups.length; index += 1) {
@@ -221,6 +259,7 @@ function buildRoundRobin(groups: Group[]) {
       matches.push({
         id: uid('match'),
         round: matches.length + 1,
+        courtNumber: 1,
         teamAId: playableGroups[index].id,
         teamBId: playableGroups[opponent].id,
         status: 'queued',
@@ -228,7 +267,27 @@ function buildRoundRobin(groups: Group[]) {
     }
   }
 
-  return matches
+  const sortedMatches = matches
+    .map((match, index) => {
+      const left = profiles.get(match.teamAId)
+      const right = profiles.get(match.teamBId)
+      return {
+        match,
+        originalIndex: index,
+        strengthGap: Math.abs((left?.strength ?? 0) - (right?.strength ?? 0)),
+        winGap: Math.abs((left?.wins ?? 0) - (right?.wins ?? 0)),
+        skillGap: Math.abs((left?.skill ?? 0) - (right?.skill ?? 0)),
+      }
+    })
+    .sort((left, right) => {
+      if (left.strengthGap !== right.strengthGap) return left.strengthGap - right.strengthGap
+      if (left.winGap !== right.winGap) return left.winGap - right.winGap
+      if (left.skillGap !== right.skillGap) return left.skillGap - right.skillGap
+      return left.originalIndex - right.originalIndex
+    })
+    .map(({ match }) => match)
+
+  return assignCourtNumbers(sortedMatches, courtCount)
 }
 
 function getJoinUrl(sessionId: string) {
@@ -253,13 +312,36 @@ function localPlayerKey(sessionId: string) {
   return `q-queue-player-${sessionId}`
 }
 
+function normalizeSkill(skill: unknown): Skill {
+  if (skill === 'Advanced' || skill === 'Beginner') return skill
+  return 'Intermediate'
+}
+
+function normalizeSession(session: Session): Session {
+  const courtCount = clampCourtCount(session.courtCount ?? 1)
+
+  return {
+    ...session,
+    courtCount,
+    matches: assignCourtNumbers(session.matches ?? [], courtCount).map((match, index) => ({
+      ...match,
+      round: session.matches?.[index]?.round ?? match.round,
+      courtNumber: session.matches?.[index]?.courtNumber ?? match.courtNumber,
+    })),
+    players: session.players.map((player) => ({
+      ...player,
+      skill: normalizeSkill(player.skill),
+    })),
+  }
+}
+
 function saveLocalSession(session: Session) {
   localStorage.setItem(localSessionKey(session.id), JSON.stringify(session))
 }
 
 function readLocalSession(sessionId: string) {
   const value = localStorage.getItem(localSessionKey(sessionId))
-  return value ? (JSON.parse(value) as Session) : null
+  return value ? normalizeSession(JSON.parse(value) as Session) : null
 }
 
 async function loadSession(sessionId: string) {
@@ -273,7 +355,7 @@ async function loadSession(sessionId: string) {
     throw error
   }
 
-  return data?.payload ?? readLocalSession(sessionId)
+  return data?.payload ? normalizeSession(data.payload) : readLocalSession(sessionId)
 }
 
 async function persistSession(session: Session) {
@@ -304,9 +386,10 @@ function App() {
   const [hostName, setHostName] = useState('')
   const [setupMode, setSetupMode] = useState<Mode>('doubles')
   const [initialGroups, setInitialGroups] = useState(4)
+  const [initialCourts, setInitialCourts] = useState(2)
   const [sessionIdInput, setSessionIdInput] = useState(initialSessionId)
   const [joinName, setJoinName] = useState('')
-  const [joinSkill, setJoinSkill] = useState<Skill>('Moderate')
+  const [joinSkill, setJoinSkill] = useState<Skill>('Intermediate')
   const [joinIcon, setJoinIcon] = useState(cuteIcons[0].icon)
   const [joinedPlayerId, setJoinedPlayerId] = useState('')
   const [notice, setNotice] = useState('')
@@ -314,6 +397,7 @@ function App() {
   const [sessionCodeError, setSessionCodeError] = useState('')
   const [dbWarning, setDbWarning] = useState('')
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [activeSessionTab, setActiveSessionTab] = useState<SessionTab>('matchQueue')
   const [now, setNow] = useState(Date.now())
 
   const isExpired = session ? new Date(session.expiresAt).getTime() <= now : false
@@ -386,6 +470,12 @@ function App() {
   useEffect(() => {
     if (!sessionId) return
 
+    setActiveSessionTab('matchQueue')
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+
     const interval = window.setInterval(async () => {
       try {
         const loaded = await loadSession(sessionId)
@@ -405,7 +495,7 @@ function App() {
       return
     }
 
-    const next = createSession(setupMode, initialGroups, hostName.trim())
+    const next = createSession(setupMode, initialGroups, initialCourts, hostName.trim())
     setSession(next)
     setRole('host')
     setJoinedPlayerId('')
@@ -615,9 +705,8 @@ function App() {
 
   function generateSchedule() {
     updateSession((current) => {
-      const competitors =
-        current.mode === 'singles' ? createSinglesCompetitors(current.players) : current.groups
-      const matches = buildRoundRobin(competitors)
+      const competitors = createMatchableCompetitors(current)
+      const matches = buildBalancedMatchQueue(competitors, current.players, current.courtCount)
       return {
         ...current,
         matches,
@@ -631,7 +720,7 @@ function App() {
       if (current.mode !== 'doubles') return current
 
       const balanced = createBalancedDoublesGroups(current.players, current.groups, true)
-      const matches = buildRoundRobin(balanced.groups)
+      const matches = buildBalancedMatchQueue(balanced.groups, balanced.players, current.courtCount)
       return {
         ...current,
         players: balanced.players,
@@ -642,6 +731,116 @@ function App() {
     })
     setNoticeTone('info')
     setNotice('Doubles partners were reassigned into balanced teams.')
+  }
+
+  function addQueuedMatch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!session) return
+
+    const formData = new FormData(event.currentTarget)
+    const teamAId = String(formData.get('teamAId') ?? '')
+    const teamBId = String(formData.get('teamBId') ?? '')
+    const competitorIds = new Set(createMatchableCompetitors(session).map((competitor) => competitor.id))
+
+    if (!competitorIds.has(teamAId) || !competitorIds.has(teamBId)) {
+      setNoticeTone('error')
+      setNotice('Choose two players or teams before adding a game.')
+      return
+    }
+
+    if (teamAId === teamBId) {
+      setNoticeTone('error')
+      setNotice('Choose two different players or teams for the game.')
+      return
+    }
+
+    updateSession((current) => {
+      const currentCompetitorIds = new Set(
+        createMatchableCompetitors(current).map((competitor) => competitor.id),
+      )
+
+      if (!currentCompetitorIds.has(teamAId) || !currentCompetitorIds.has(teamBId)) {
+        return current
+      }
+
+      const match: Match = {
+        id: uid('match'),
+        round: current.matches.length + 1,
+        courtNumber: (current.matches.length % current.courtCount) + 1,
+        teamAId,
+        teamBId,
+        status: 'queued',
+      }
+      const matches = [...current.matches, match]
+
+      return {
+        ...current,
+        matches,
+        activeMatchId: current.activeMatchId ?? match.id,
+      }
+    })
+    setNoticeTone('info')
+    setNotice('Game added to the match queue.')
+  }
+
+  function removeQueuedMatch(matchId: string) {
+    updateSession((current) => {
+      const match = current.matches.find((item) => item.id === matchId)
+      if (!match) return current
+
+      const currentCompetitors = createCompetitorMap(current)
+      const loserId = match.winnerId && match.teamAId === match.winnerId ? match.teamBId : match.teamAId
+      const winnerPlayers = match.winnerId ? currentCompetitors.get(match.winnerId)?.playerIds ?? [] : []
+      const loserPlayers =
+        match.status === 'finished' && match.winnerId
+          ? currentCompetitors.get(loserId)?.playerIds ?? []
+          : []
+      const players =
+        match.status === 'finished' && match.winnerId
+          ? current.players.map((player) => {
+              if (winnerPlayers.includes(player.id)) {
+                return {
+                  ...player,
+                  stats: {
+                    ...player.stats,
+                    played: Math.max(0, player.stats.played - 1),
+                    wins: Math.max(0, player.stats.wins - 1),
+                  },
+                }
+              }
+
+              if (loserPlayers.includes(player.id)) {
+                return {
+                  ...player,
+                  stats: {
+                    ...player.stats,
+                    played: Math.max(0, player.stats.played - 1),
+                    losses: Math.max(0, player.stats.losses - 1),
+                  },
+                }
+              }
+
+              return player
+            })
+          : current.players
+      const matches = current.matches
+        .filter((item) => item.id !== matchId)
+        .map((item, index) => ({ ...item, round: index + 1 }))
+      const courtedMatches = assignCourtNumbers(matches, current.courtCount)
+      const activeMatchId =
+        current.activeMatchId && courtedMatches.some((item) => item.id === current.activeMatchId)
+          ? current.activeMatchId
+          : courtedMatches.find((item) => item.status === 'queued')?.id
+
+      return {
+        ...current,
+        players,
+        matches: courtedMatches,
+        activeMatchId,
+      }
+    })
+    setNoticeTone('info')
+    setNotice('Game removed from the match queue.')
   }
 
   function finishMatch(matchId: string, winnerId: string) {
@@ -729,6 +928,7 @@ function App() {
     role === 'join'
       ? session?.matches.filter((match) => match.status === 'queued') ?? []
       : session?.matches ?? []
+  const matchableCompetitors = session ? createMatchableCompetitors(session) : []
   const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
   const joinedGroup =
     session?.mode === 'singles'
@@ -752,24 +952,26 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="hero-panel">
-        <div className="hero-copy">
-          <div className="brand-pill">
-            <Swords size={18} />
-            QueueQ
+      {!session && (
+        <section className="hero-panel">
+          <div className="hero-copy">
+            <div className="brand-pill">
+              <Swords size={18} />
+              QueueQ
+            </div>
+            <h1>Run fair court rotations without the clipboard chaos.</h1>
+            <p>
+              Create a 24-hour session, invite players by QR, form teams, and keep wins,
+              losses, and games played in one bright match board.
+            </p>
           </div>
-          <h1>Run fair court rotations without the clipboard chaos.</h1>
-          <p>
-            Create a 24-hour session, invite players by QR, form teams, and keep wins,
-            losses, and games played in one bright match board.
-          </p>
-        </div>
-        <div className="hero-card">
-          <div className="orb orb-one" />
-          <div className="orb orb-two" />
-          <div className="mini-court" aria-hidden="true" />
-        </div>
-      </section>
+          <div className="hero-card">
+            <div className="orb orb-one" />
+            <div className="orb orb-two" />
+            <div className="mini-court" aria-hidden="true" />
+          </div>
+        </section>
+      )}
 
       {dbWarning && (
         <div className="notice warning">
@@ -828,6 +1030,17 @@ function App() {
                 />
               </label>
             )}
+
+            <label className="field">
+              Available courts
+              <input
+                min={1}
+                max={12}
+                type="number"
+                value={initialCourts}
+                onChange={(event) => setInitialCourts(clampCourtCount(Number(event.target.value)))}
+              />
+            </label>
 
             <button className="primary-button" type="button" onClick={startSession}>
               Create session
@@ -938,7 +1151,7 @@ function App() {
             </div>
           )}
 
-          {role === 'join' && joinedPlayerId && (
+          {role === 'join' && joinedPlayerId && activeSessionTab === 'playerCards' && (
             <section className="panel player-teams-panel">
               <div className="section-title">
                 <Users size={22} />
@@ -1026,7 +1239,7 @@ function App() {
             </section>
           )}
 
-          {role === 'host' && (
+          {role === 'host' && activeSessionTab === 'playerCards' && (
             <div className="host-layout">
               <aside className="panel invite-card">
                 <div className="section-title">
@@ -1220,8 +1433,9 @@ function App() {
             </div>
           )}
 
-          {(role === 'host' || joinedPlayerId) && (
-          <section className={role === 'join' ? 'player-session-stack' : 'match-and-stats'}>
+          {(role === 'host' || joinedPlayerId) && activeSessionTab !== 'playerCards' && (
+          <section className="player-session-stack">
+            {activeSessionTab === 'matchQueue' && (
             <div className="panel matches-panel">
               <div className="section-title">
                 <Trophy size={22} />
@@ -1230,12 +1444,49 @@ function App() {
                   <h2>{role === 'join' ? 'Upcoming matches' : activeMatch ? 'Now playing' : 'Schedule'}</h2>
                 </div>
               </div>
+              {role === 'host' && (
+                <form className="manual-match-form" onSubmit={addQueuedMatch}>
+                  <label className="field">
+                    Player / team A
+                    <select
+                      defaultValue={matchableCompetitors[0]?.id ?? ''}
+                      disabled={matchableCompetitors.length < 2}
+                      name="teamAId"
+                    >
+                      {matchableCompetitors.map((competitor) => (
+                        <option key={competitor.id} value={competitor.id}>
+                          {competitor.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="versus-label">vs</span>
+                  <label className="field">
+                    Player / team B
+                    <select
+                      defaultValue={matchableCompetitors[1]?.id ?? ''}
+                      disabled={matchableCompetitors.length < 2}
+                      name="teamBId"
+                    >
+                      {matchableCompetitors.map((competitor) => (
+                        <option key={competitor.id} value={competitor.id}>
+                          {competitor.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    className="secondary-button"
+                    disabled={matchableCompetitors.length < 2}
+                    type="submit"
+                  >
+                    <CirclePlus size={16} />
+                    Add game
+                  </button>
+                </form>
+              )}
               {displayedMatches.length === 0 ? (
-                <p className="empty">
-                  {role === 'join'
-                    ? 'No upcoming matches yet.'
-                    : 'Generate matches after teams have players.'}
-                </p>
+                <p className="empty">Waiting for the host to start matching.</p>
               ) : (
                 <div className="match-list">
                   {displayedMatches.map((match, index) => {
@@ -1246,7 +1497,10 @@ function App() {
                     return (
                       <article className={isActive ? 'match-card active' : 'match-card'} key={match.id}>
                         <div className="match-info">
-                          <span className="round-label">Game {index + 1}</span>
+                          <div className="match-labels">
+                            <span className="round-label">Game {index + 1}</span>
+                            <span className="court-label">Court {match.courtNumber}</span>
+                          </div>
                           <strong>
                             {teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A')} vs{' '}
                             {teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B')}
@@ -1273,6 +1527,13 @@ function App() {
                                 </button>
                               </>
                             )}
+                            <button
+                              className="danger-button"
+                              type="button"
+                              onClick={() => removeQueuedMatch(match.id)}
+                            >
+                              Remove game
+                            </button>
                           </div>
                         )}
                         {match.status === 'finished' && (
@@ -1287,7 +1548,9 @@ function App() {
                 </div>
               )}
             </div>
+            )}
 
+            {activeSessionTab === 'playerTally' && (
             <div className="panel stats-panel">
               <div className="section-title">
                 <Users size={22} />
@@ -1318,7 +1581,39 @@ function App() {
                 ))}
               </div>
             </div>
+            )}
           </section>
+          )}
+          {(role === 'host' || joinedPlayerId) && (
+            <footer className="session-footer-tabs" aria-label="Session tabs">
+              <button
+                aria-current={activeSessionTab === 'playerCards' ? 'page' : undefined}
+                className={activeSessionTab === 'playerCards' ? 'session-tab active' : 'session-tab'}
+                type="button"
+                onClick={() => setActiveSessionTab('playerCards')}
+              >
+                <Users size={20} />
+                <span>Player cards</span>
+              </button>
+              <button
+                aria-current={activeSessionTab === 'matchQueue' ? 'page' : undefined}
+                className={activeSessionTab === 'matchQueue' ? 'session-tab active' : 'session-tab'}
+                type="button"
+                onClick={() => setActiveSessionTab('matchQueue')}
+              >
+                <Trophy size={20} />
+                <span>Match Queue</span>
+              </button>
+              <button
+                aria-current={activeSessionTab === 'playerTally' ? 'page' : undefined}
+                className={activeSessionTab === 'playerTally' ? 'session-tab active' : 'session-tab'}
+                type="button"
+                onClick={() => setActiveSessionTab('playerTally')}
+              >
+                <CheckCircle2 size={20} />
+                <span>Player tally</span>
+              </button>
+            </footer>
           )}
         </section>
       )}
