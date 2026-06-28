@@ -594,6 +594,25 @@ function App() {
     })
   }
 
+  function renameGroup(groupId: string, name: string) {
+    const nextName = name.trim()
+
+    if (!nextName) {
+      setNoticeTone('error')
+      setNotice('Team name cannot be empty.')
+      return
+    }
+
+    updateSession((current) => ({
+      ...current,
+      groups: current.groups.map((group) =>
+        group.id === groupId ? { ...group, name: nextName } : group,
+      ),
+    }))
+    setNoticeTone('info')
+    setNotice('Team name updated.')
+  }
+
   function generateSchedule() {
     updateSession((current) => {
       const competitors =
@@ -953,6 +972,30 @@ function App() {
                     <div className="team-card-header">
                       <h3>{joinedGroup.name}</h3>
                     </div>
+                    {session.mode === 'doubles' && (
+                      <form
+                        className="team-name-form"
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          const formData = new FormData(event.currentTarget)
+                          renameGroup(joinedGroup.id, String(formData.get('teamName') ?? ''))
+                        }}
+                      >
+                        <label className="field">
+                          Team name
+                          <input
+                            defaultValue={joinedGroup.name}
+                            key={joinedGroup.id}
+                            maxLength={36}
+                            name="teamName"
+                            placeholder="e.g. Team Smash"
+                          />
+                        </label>
+                        <button className="secondary-button" type="submit">
+                          Save name
+                        </button>
+                      </form>
+                    )}
                     <p className="team-meta">
                       {session.mode === 'singles'
                         ? 'Singles competitor'

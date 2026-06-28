@@ -637,6 +637,16 @@ small {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.team-name-form {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+
+.team-name-form .secondary-button {
+  justify-self: start;
+}
+
 .waiting-card {
   display: grid;
   gap: 12px;
