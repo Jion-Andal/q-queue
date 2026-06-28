@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { createClient } from '@supabase/supabase-js'
 import {
@@ -6,9 +6,10 @@ import {
   CirclePlus,
   Copy,
   Crown,
+  Download,
+  History,
   QrCode,
   Shuffle,
-  Swords,
   Trophy,
   UserPlus,
   Users,
@@ -382,7 +383,29 @@ function getMatchStatusLabel(status: MatchStatus) {
   return 'Queued'
 }
 
+function drawRoundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  context.beginPath()
+  context.moveTo(x + radius, y)
+  context.lineTo(x + width - radius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + radius)
+  context.lineTo(x + width, y + height - radius)
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height)
+  context.lineTo(x + radius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - radius)
+  context.lineTo(x, y + radius)
+  context.quadraticCurveTo(x, y, x + radius, y)
+  context.closePath()
+}
+
 function App() {
+  const inviteQrRef = useRef<HTMLCanvasElement | null>(null)
   const params = new URLSearchParams(window.location.search)
   const initialSessionId = params.get('session') ?? ''
   const initialRole = params.get('role') === 'join' ? 'join' : 'host'
@@ -404,7 +427,10 @@ function App() {
   const [dbWarning, setDbWarning] = useState('')
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [isAddMatchModalOpen, setIsAddMatchModalOpen] = useState(false)
-  const [activeSessionTab, setActiveSessionTab] = useState<SessionTab>('matchQueue')
+  const [isMatchHistoryOpen, setIsMatchHistoryOpen] = useState(false)
+  const [activeSessionTab, setActiveSessionTab] = useState<SessionTab>(
+    initialRole === 'host' ? 'playerCards' : 'matchQueue',
+  )
   const [now, setNow] = useState(Date.now())
 
   const isExpired = session ? new Date(session.expiresAt).getTime() <= now : false
@@ -477,8 +503,8 @@ function App() {
   useEffect(() => {
     if (!sessionId) return
 
-    setActiveSessionTab('matchQueue')
-  }, [sessionId])
+    setActiveSessionTab(role === 'host' ? 'playerCards' : 'matchQueue')
+  }, [role, sessionId])
 
   useEffect(() => {
     if (!sessionId) return
@@ -505,6 +531,7 @@ function App() {
     const next = createSession(setupMode, initialGroups, initialCourts, hostName.trim())
     setSession(next)
     setRole('host')
+    setActiveSessionTab('playerCards')
     setJoinedPlayerId('')
     setNotice('')
     setNoticeTone('info')
@@ -532,6 +559,7 @@ function App() {
 
     const code = sessionIdInput.trim().toUpperCase()
     setRole('join')
+    setActiveSessionTab('matchQueue')
     window.history.replaceState(null, '', getJoinUrl(code))
 
     try {
@@ -961,12 +989,70 @@ function App() {
     await action?.()
   }
 
+  function downloadInviteQr() {
+    if (!session || !inviteQrRef.current) return
+
+    const canvas = document.createElement('canvas')
+    canvas.width = 900
+    canvas.height = 1100
+    const context = canvas.getContext('2d')
+    if (!context) return
+
+    const background = context.createLinearGradient(0, 0, canvas.width, canvas.height)
+    background.addColorStop(0, '#eaf8ff')
+    background.addColorStop(0.55, '#f7fbff')
+    background.addColorStop(1, '#f1e9ff')
+    context.fillStyle = background
+    context.fillRect(0, 0, canvas.width, canvas.height)
+
+    context.fillStyle = 'rgba(116, 232, 201, 0.38)'
+    context.beginPath()
+    context.arc(100, 125, 220, 0, Math.PI * 2)
+    context.fill()
+    context.fillStyle = 'rgba(163, 124, 255, 0.32)'
+    context.beginPath()
+    context.arc(820, 115, 210, 0, Math.PI * 2)
+    context.fill()
+
+    drawRoundedRect(context, 80, 80, 740, 940, 48)
+    context.fillStyle = 'rgba(255, 255, 255, 0.9)'
+    context.fill()
+    context.strokeStyle = 'rgba(24, 33, 83, 0.1)'
+    context.lineWidth = 3
+    context.stroke()
+
+    context.fillStyle = '#111735'
+    context.font = '900 72px Inter, Segoe UI, sans-serif'
+    context.textAlign = 'center'
+    context.fillText('QueueQ', canvas.width / 2, 202)
+
+    context.fillStyle = '#5e668f'
+    context.font = '800 28px Inter, Segoe UI, sans-serif'
+    context.fillText('Scan to join this court queue', canvas.width / 2, 295)
+
+    drawRoundedRect(context, 220, 350, 460, 460, 36)
+    context.fillStyle = '#ffffff'
+    context.fill()
+    context.drawImage(inviteQrRef.current, 260, 390, 380, 380)
+
+    context.fillStyle = '#7e86a6'
+    context.font = '900 22px Inter, Segoe UI, sans-serif'
+    context.fillText('SESSION CODE', canvas.width / 2, 875)
+    context.fillStyle = '#111735'
+    context.font = '1000 56px Inter, Segoe UI, sans-serif'
+    context.fillText(session.id, canvas.width / 2, 942)
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const link = document.createElement('a')
+    link.download = `queueq-${session.id}-qr-${timestamp}.png`
+    link.href = canvas.toDataURL('image/png')
+    link.click()
+  }
+
   const hostWaitingPlayers =
     session?.mode === 'singles' ? session.players : session?.players.filter((player) => !player.groupId) ?? []
-  const displayedMatches =
-    role === 'join'
-      ? session?.matches.filter((match) => match.status !== 'finished') ?? []
-      : session?.matches ?? []
+  const displayedMatches = session?.matches.filter((match) => match.status !== 'finished') ?? []
+  const finishedMatches = session?.matches.filter((match) => match.status === 'finished') ?? []
   const matchableCompetitors = session ? createMatchableCompetitors(session) : []
   const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
   const joinedGroup =
@@ -996,7 +1082,9 @@ function App() {
         <section className="hero-panel">
           <div className="hero-copy">
             <div className="brand-pill">
-              <Swords size={18} />
+              <span className="brand-icon" aria-hidden="true">
+                Q
+              </span>
               QueueQ
             </div>
             <h1>Run fair court rotations without the clipboard chaos.</h1>
@@ -1276,6 +1364,49 @@ function App() {
                   </article>
                 </div>
               )}
+              <div className="participants-panel">
+                <div className="section-title">
+                  <Users size={22} />
+                  <div>
+                    <p className="eyebrow">All participants</p>
+                    <h2>{session.players.length} checked in</h2>
+                  </div>
+                </div>
+                {session.players.length === 0 ? (
+                  <p className="empty">Players will appear here after joining.</p>
+                ) : (
+                  <div className="participants-list">
+                    {session.players.map((player) => {
+                      const teamName =
+                        session.mode === 'singles'
+                          ? 'Singles player'
+                          : player.groupId
+                            ? competitorById.get(player.groupId)?.name ?? 'Assigned team'
+                            : 'Waiting room'
+
+                      return (
+                        <div
+                          className={
+                            player.id === joinedPlayerId ? 'participant-row current-player' : 'participant-row'
+                          }
+                          key={player.id}
+                        >
+                          <div className="player-identity">
+                            <span className="player-icon" aria-hidden="true">
+                              {player.icon ?? '🐼'}
+                            </span>
+                            <span>
+                              <strong>{player.name}</strong>
+                              <small>{player.skill}</small>
+                            </span>
+                          </div>
+                          <span className="participant-team">{teamName}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
             </section>
           )}
 
@@ -1290,32 +1421,36 @@ function App() {
                   </div>
                 </div>
                 <div className="qr-box">
-                  <QRCodeCanvas value={joinUrl} size={180} />
+                  <QRCodeCanvas ref={inviteQrRef} value={joinUrl} size={180} />
                 </div>
                 <p className="code">{session.id}</p>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(joinUrl)}
-                >
-                  <Copy size={16} />
-                  Copy invite link
-                </button>
+                <div className="invite-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(joinUrl)}
+                  >
+                    <Copy size={16} />
+                    Copy invite link
+                  </button>
+                  <button className="secondary-button" type="button" onClick={downloadInviteQr}>
+                    <Download size={16} />
+                    Download QR
+                  </button>
+                </div>
                 <button className="danger-button" type="button" onClick={requestTerminateSession}>
                   Terminate session
                 </button>
               </aside>
 
               <div className="main-stack">
-                <div className="toolbar panel">
-                  <div className="toolbar-actions">
-                    {session.mode === 'doubles' && (
+                {session.mode === 'doubles' && (
+                  <div className="toolbar panel">
+                    <div className="toolbar-actions">
                       <button className="secondary-button" type="button" onClick={addGroup}>
                         <CirclePlus size={16} />
                         Add team
                       </button>
-                    )}
-                    {session.mode === 'doubles' && (
                       <button
                         className="secondary-button"
                         disabled={session.players.length < 2}
@@ -1325,23 +1460,9 @@ function App() {
                         <Shuffle size={16} />
                         Reassign partners
                       </button>
-                    )}
-                    <button
-                      className="primary-button"
-                      disabled={!canGenerateMatches}
-                      type="button"
-                      onClick={generateSchedule}
-                    >
-                      <Shuffle size={16} />
-                      Generate matches
-                    </button>
+                    </div>
                   </div>
-                  <p className={canGenerateMatches ? 'toolbar-reminder ready' : 'toolbar-reminder'}>
-                    {canGenerateMatches
-                      ? 'Ready to generate matches.'
-                      : generateMatchesReminder}
-                  </p>
-                </div>
+                )}
 
                 {hostWaitingPlayers.length > 0 && (
                   <div className="panel">
@@ -1477,23 +1598,55 @@ function App() {
           <section className="player-session-stack">
             {activeSessionTab === 'matchQueue' && (
             <div className="panel matches-panel">
-              <div className="section-title">
-                <Trophy size={22} />
-                <div>
-                  <p className="eyebrow">Match queue</p>
-                  <h2>{role === 'join' ? 'Upcoming matches' : activeMatch ? 'Now playing' : 'Schedule'}</h2>
+              <div className="match-panel-header">
+                <div className="section-title">
+                  <Trophy size={22} />
+                  <div>
+                    <p className="eyebrow">Match queue</p>
+                    <div className="title-action-row">
+                      <h2>{role === 'join' ? 'Upcoming matches' : activeMatch ? 'Now playing' : 'Schedule'}</h2>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => setIsMatchHistoryOpen(true)}
+                      >
+                        <History size={16} />
+                        Match history ({finishedMatches.length})
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="queue-actions">
+                  {role === 'host' && (
+                    <>
+                      <button
+                        className="primary-button"
+                        disabled={!canGenerateMatches}
+                        type="button"
+                        onClick={generateSchedule}
+                      >
+                        <Shuffle size={16} />
+                        Generate matches
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={matchableCompetitors.length < 2}
+                        type="button"
+                        onClick={() => setIsAddMatchModalOpen(true)}
+                      >
+                        <CirclePlus size={16} />
+                        Add game
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
               {role === 'host' && (
-                  <button
-                    className="secondary-button"
-                    disabled={matchableCompetitors.length < 2}
-                    type="button"
-                    onClick={() => setIsAddMatchModalOpen(true)}
-                  >
-                    <CirclePlus size={16} />
-                    Add game
-                  </button>
+                <p className={canGenerateMatches ? 'toolbar-reminder ready' : 'toolbar-reminder'}>
+                  {canGenerateMatches
+                    ? 'Ready to generate matches.'
+                    : generateMatchesReminder}
+                </p>
               )}
               {displayedMatches.length === 0 ? (
                 <p className="empty">Waiting for the host to start matching.</p>
@@ -1664,6 +1817,98 @@ function App() {
             </footer>
           )}
         </section>
+      )}
+      {isMatchHistoryOpen && session && (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            aria-describedby="match-history-description"
+            aria-labelledby="match-history-title"
+            aria-modal="true"
+            className="confirmation-modal match-history-modal"
+            role="dialog"
+          >
+            <div>
+              <p className="eyebrow">Past games</p>
+              <h2 id="match-history-title">Match history</h2>
+            </div>
+            <p id="match-history-description">
+              Review completed games, winners, courts, and player details from this session.
+            </p>
+            {finishedMatches.length === 0 ? (
+              <p className="empty">Finished games will appear here after a winner is selected.</p>
+            ) : (
+              <div className="history-list">
+                {finishedMatches.map((match) => {
+                  const teamA = competitorById.get(match.teamAId)
+                  const teamB = competitorById.get(match.teamBId)
+                  const winner = competitorById.get(match.winnerId ?? '')
+                  const teamAPlayers = (teamA?.playerIds ?? [])
+                    .map((playerId) => playerById.get(playerId))
+                    .filter((player): player is Player => Boolean(player))
+                  const teamBPlayers = (teamB?.playerIds ?? [])
+                    .map((playerId) => playerById.get(playerId))
+                    .filter((player): player is Player => Boolean(player))
+
+                  return (
+                    <article className="history-card" key={match.id}>
+                      <div className="match-labels">
+                        <span className="round-label">Game {match.round}</span>
+                        <span className="court-label">Court {match.courtNumber}</span>
+                      </div>
+                      <div className="history-matchup">
+                        <strong>
+                          {teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A')} vs{' '}
+                          {teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B')}
+                        </strong>
+                        <span className="winner">
+                          <CheckCircle2 size={15} />
+                          {winner?.name ?? 'Winner'} won
+                        </span>
+                      </div>
+                      <div className="history-rosters">
+                        <div>
+                          <p>{teamA?.name ?? 'Team A'}</p>
+                          {teamAPlayers.length === 0 ? (
+                            <small>No players listed</small>
+                          ) : (
+                            teamAPlayers.map((player) => (
+                              <span className="history-player" key={player.id}>
+                                <span aria-hidden="true">{player.icon ?? '🐼'}</span>
+                                {player.name}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                        <div>
+                          <p>{teamB?.name ?? 'Team B'}</p>
+                          {teamBPlayers.length === 0 ? (
+                            <small>No players listed</small>
+                          ) : (
+                            teamBPlayers.map((player) => (
+                              <span className="history-player" key={player.id}>
+                                <span aria-hidden="true">{player.icon ?? '🐼'}</span>
+                                {player.name}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setIsMatchHistoryOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {isAddMatchModalOpen && session && role === 'host' && (
         <div className="modal-backdrop" role="presentation">

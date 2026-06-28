@@ -1,11 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="16" fill="#eef2ff"/>
-  <path d="M18 12 52 46" stroke="#5466ff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M46 52 52 46" stroke="#5466ff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M12 18 18 12" stroke="#5466ff" stroke-width="5" stroke-linecap="round"/>
-  <path d="M46 12 12 46" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
-  <path d="M18 52 12 46" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
-  <path d="M52 18 46 12" stroke="#10b981" stroke-width="5" stroke-linecap="round"/>
-  <path d="M24 40 40 24" stroke="#111735" stroke-width="4" stroke-linecap="round"/>
-  <path d="M24 24 40 40" stroke="#111735" stroke-width="4" stroke-linecap="round"/>
+  <defs>
+    <linearGradient id="queueq-icon" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#68d8ff"/>
+      <stop offset="1" stop-color="#7b5cff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="48" height="48" rx="15" fill="url(#queueq-icon)"/>
+  <path
+    d="M32 44c-7.1 0-12-4.9-12-12s4.9-12 12-12 12 4.9 12 12c0 2.6-.7 4.9-2.1 6.8l3.2 3.2-4.2 4.2-3.2-3.2A13 13 0 0 1 32 44Zm0-7.2c2.9 0 4.8-1.9 4.8-4.8s-1.9-4.8-4.8-4.8-4.8 1.9-4.8 4.8 1.9 4.8 4.8 4.8Z"
+    fill="#fff"
+  />
 </svg>
