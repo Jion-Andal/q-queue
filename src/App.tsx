@@ -1132,6 +1132,30 @@ function App() {
                                     </span>
                                   </div>
                                   <div className="roster-actions">
+                                    <select
+                                      className="move-player-select"
+                                      value={group.id}
+                                      onChange={(event) => assignPlayer(player.id, event.target.value)}
+                                    >
+                                      {session.groups.map((targetGroup) => (
+                                        <option
+                                          disabled={
+                                            targetGroup.id !== group.id &&
+                                            targetGroup.playerIds.length >= 2
+                                          }
+                                          key={targetGroup.id}
+                                          value={targetGroup.id}
+                                        >
+                                          {targetGroup.id === group.id
+                                            ? `${targetGroup.name} (current)`
+                                            : targetGroup.name}
+                                          {targetGroup.id !== group.id &&
+                                          targetGroup.playerIds.length >= 2
+                                            ? ' (full)'
+                                            : ''}
+                                        </option>
+                                      ))}
+                                    </select>
                                     <button
                                       className="tiny-button"
                                       type="button"
