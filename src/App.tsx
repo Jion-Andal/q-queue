@@ -1123,7 +1123,7 @@ function App() {
             <label className="field">
               Host username
               <input
-                placeholder="e.g. Coach Mia"
+                placeholder="e.g. Coach Jion"
                 value={hostName}
                 onChange={(event) => setHostName(event.target.value)}
               />
