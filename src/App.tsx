@@ -397,6 +397,7 @@ function App() {
   const [sessionCodeError, setSessionCodeError] = useState('')
   const [dbWarning, setDbWarning] = useState('')
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [isAddMatchModalOpen, setIsAddMatchModalOpen] = useState(false)
   const [activeSessionTab, setActiveSessionTab] = useState<SessionTab>('matchQueue')
   const [now, setNow] = useState(Date.now())
 
@@ -781,6 +782,7 @@ function App() {
     })
     setNoticeTone('info')
     setNotice('Game added to the match queue.')
+    setIsAddMatchModalOpen(false)
   }
 
   function removeQueuedMatch(matchId: string) {
@@ -1445,45 +1447,15 @@ function App() {
                 </div>
               </div>
               {role === 'host' && (
-                <form className="manual-match-form" onSubmit={addQueuedMatch}>
-                  <label className="field">
-                    Player / team A
-                    <select
-                      defaultValue={matchableCompetitors[0]?.id ?? ''}
-                      disabled={matchableCompetitors.length < 2}
-                      name="teamAId"
-                    >
-                      {matchableCompetitors.map((competitor) => (
-                        <option key={competitor.id} value={competitor.id}>
-                          {competitor.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <span className="versus-label">vs</span>
-                  <label className="field">
-                    Player / team B
-                    <select
-                      defaultValue={matchableCompetitors[1]?.id ?? ''}
-                      disabled={matchableCompetitors.length < 2}
-                      name="teamBId"
-                    >
-                      {matchableCompetitors.map((competitor) => (
-                        <option key={competitor.id} value={competitor.id}>
-                          {competitor.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
                   <button
                     className="secondary-button"
                     disabled={matchableCompetitors.length < 2}
-                    type="submit"
+                    type="button"
+                    onClick={() => setIsAddMatchModalOpen(true)}
                   >
                     <CirclePlus size={16} />
                     Add game
                   </button>
-                </form>
               )}
               {displayedMatches.length === 0 ? (
                 <p className="empty">Waiting for the host to start matching.</p>
@@ -1616,6 +1588,72 @@ function App() {
             </footer>
           )}
         </section>
+      )}
+      {isAddMatchModalOpen && session && role === 'host' && (
+        <div className="modal-backdrop" role="presentation">
+          <form
+            aria-describedby="add-match-description"
+            aria-labelledby="add-match-title"
+            aria-modal="true"
+            className="confirmation-modal add-match-modal"
+            role="dialog"
+            onSubmit={addQueuedMatch}
+          >
+            <div>
+              <p className="eyebrow">Optional game</p>
+              <h2 id="add-match-title">Add a game</h2>
+            </div>
+            <p id="add-match-description">
+              Pick two players or teams to add a custom game to the match queue.
+            </p>
+            <div className="add-match-form">
+              <label className="field">
+                Player / team A
+                <select
+                  defaultValue={matchableCompetitors[0]?.id ?? ''}
+                  disabled={matchableCompetitors.length < 2}
+                  name="teamAId"
+                >
+                  {matchableCompetitors.map((competitor) => (
+                    <option key={competitor.id} value={competitor.id}>
+                      {competitor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                Player / team B
+                <select
+                  defaultValue={matchableCompetitors[1]?.id ?? ''}
+                  disabled={matchableCompetitors.length < 2}
+                  name="teamBId"
+                >
+                  {matchableCompetitors.map((competitor) => (
+                    <option key={competitor.id} value={competitor.id}>
+                      {competitor.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setIsAddMatchModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                disabled={matchableCompetitors.length < 2}
+                type="submit"
+              >
+                Add game
+              </button>
+            </div>
+          </form>
+        </div>
       )}
       {confirmation && (
         <div className="modal-backdrop" role="presentation">

@@ -207,22 +207,12 @@
   gap: 10px;
 }
 
-.manual-match-form {
+.add-match-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-  margin-bottom: 14px;
+  gap: 12px;
   padding: 12px;
   border-radius: 18px;
   background: #f6f8ff;
-}
-
-.versus-label {
-  align-self: center;
-  color: #7b83a5;
-  font-weight: 1000;
-  text-transform: uppercase;
 }
 
 .toolbar-reminder {
@@ -828,13 +818,6 @@ small {
     grid-template-columns: 1fr;
   }
 
-  .manual-match-form {
-    grid-template-columns: 1fr;
-  }
-
-  .versus-label {
-    display: none;
-  }
 }
 
 @media (max-width: 680px) {
