@@ -22,7 +22,7 @@ const supabase = createClient(
 
 type Mode = 'singles' | 'doubles'
 type Skill = 'Advanced' | 'Intermediate' | 'Beginner'
-type MatchStatus = 'queued' | 'finished'
+type MatchStatus = 'queued' | 'in-progress' | 'finished'
 type SessionTab = 'playerCards' | 'matchQueue' | 'playerTally'
 
 type Player = {
@@ -374,6 +374,12 @@ async function persistSession(session: Session) {
 
 function emptyStats() {
   return { played: 0, wins: 0, losses: 0 }
+}
+
+function getMatchStatusLabel(status: MatchStatus) {
+  if (status === 'in-progress') return 'In progress'
+  if (status === 'finished') return 'Finished'
+  return 'Queued'
 }
 
 function App() {
@@ -832,7 +838,8 @@ function App() {
       const activeMatchId =
         current.activeMatchId && courtedMatches.some((item) => item.id === current.activeMatchId)
           ? current.activeMatchId
-          : courtedMatches.find((item) => item.status === 'queued')?.id
+          : courtedMatches.find((item) => item.status === 'in-progress')?.id ??
+            courtedMatches.find((item) => item.status === 'queued')?.id
 
       return {
         ...current,
@@ -845,10 +852,38 @@ function App() {
     setNotice('Game removed from the match queue.')
   }
 
-  function finishMatch(matchId: string, winnerId: string) {
+  function startMatch(matchId: string, actorCompetitorId?: string) {
+    updateSession((current) => {
+      const match = current.matches.find((item) => item.id === matchId)
+      if (!match || match.status !== 'queued') return current
+
+      const isAssignedMatch =
+        !actorCompetitorId ||
+        match.teamAId === actorCompetitorId ||
+        match.teamBId === actorCompetitorId
+      if (!isAssignedMatch) return current
+
+      return {
+        ...current,
+        matches: current.matches.map((item) =>
+          item.id === matchId ? { ...item, status: 'in-progress' as const } : item,
+        ),
+        activeMatchId: matchId,
+      }
+    })
+  }
+
+  function finishMatch(matchId: string, winnerId: string, actorCompetitorId?: string) {
     updateSession((current) => {
       const match = current.matches.find((item) => item.id === matchId)
       if (!match || match.status === 'finished') return current
+      if (winnerId !== match.teamAId && winnerId !== match.teamBId) return current
+
+      const isAssignedMatch =
+        !actorCompetitorId ||
+        match.teamAId === actorCompetitorId ||
+        match.teamBId === actorCompetitorId
+      if (!isAssignedMatch) return current
 
       const loserId = match.teamAId === winnerId ? match.teamBId : match.teamAId
       const currentCompetitors = createCompetitorMap(current)
@@ -884,7 +919,9 @@ function App() {
       const matches = current.matches.map((item) =>
         item.id === matchId ? { ...item, status: 'finished' as const, winnerId } : item,
       )
-      const nextMatch = matches.find((item) => item.status === 'queued')
+      const nextMatch =
+        matches.find((item) => item.status === 'in-progress') ??
+        matches.find((item) => item.status === 'queued')
 
       return {
         ...current,
@@ -928,7 +965,7 @@ function App() {
     session?.mode === 'singles' ? session.players : session?.players.filter((player) => !player.groupId) ?? []
   const displayedMatches =
     role === 'join'
-      ? session?.matches.filter((match) => match.status === 'queued') ?? []
+      ? session?.matches.filter((match) => match.status !== 'finished') ?? []
       : session?.matches ?? []
   const matchableCompetitors = session ? createMatchableCompetitors(session) : []
   const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
@@ -940,6 +977,7 @@ function App() {
       : joinedPlayer?.groupId
         ? competitorById.get(joinedPlayer.groupId)
         : undefined
+  const joinedCompetitorId = joinedGroup?.id
   const eligibleDoublesTeams = session?.groups.filter((group) => group.playerIds.length > 0) ?? []
   const hasEmptyDoublesTeams = session?.groups.some((group) => group.playerIds.length === 0) ?? false
   const canGenerateMatches = session
@@ -1465,6 +1503,13 @@ function App() {
                     const teamA = competitorById.get(match.teamAId)
                     const teamB = competitorById.get(match.teamBId)
                     const isActive = match.id === session.activeMatchId
+                    const isJoinedPlayerMatch =
+                      Boolean(joinedCompetitorId) &&
+                      (match.teamAId === joinedCompetitorId || match.teamBId === joinedCompetitorId)
+                    const canPlayerStartMatch =
+                      role === 'join' && isJoinedPlayerMatch && match.status === 'queued'
+                    const canPlayerSubmitWinner =
+                      role === 'join' && isJoinedPlayerMatch && match.status === 'in-progress'
 
                     return (
                       <article className={isActive ? 'match-card active' : 'match-card'} key={match.id}>
@@ -1477,7 +1522,7 @@ function App() {
                             {teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A')} vs{' '}
                             {teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B')}
                           </strong>
-                          <small>{match.status === 'finished' ? 'Finished' : 'Queued'}</small>
+                          <small>{getMatchStatusLabel(match.status)}</small>
                         </div>
                         {role === 'host' && (
                           <div className="match-actions">
@@ -1506,6 +1551,37 @@ function App() {
                             >
                               Remove game
                             </button>
+                          </div>
+                        )}
+                        {(canPlayerStartMatch || canPlayerSubmitWinner) && (
+                          <div className="match-actions player-match-actions">
+                            {canPlayerStartMatch && (
+                              <button
+                                className="primary-button"
+                                type="button"
+                                onClick={() => startMatch(match.id, joinedCompetitorId)}
+                              >
+                                Set in-progress
+                              </button>
+                            )}
+                            {canPlayerSubmitWinner && (
+                              <>
+                                <button
+                                  className="win-button"
+                                  type="button"
+                                  onClick={() => finishMatch(match.id, match.teamAId, joinedCompetitorId)}
+                                >
+                                  {teamA?.name} won
+                                </button>
+                                <button
+                                  className="win-button"
+                                  type="button"
+                                  onClick={() => finishMatch(match.id, match.teamBId, joinedCompetitorId)}
+                                >
+                                  {teamB?.name} won
+                                </button>
+                              </>
+                            )}
                           </div>
                         )}
                         {match.status === 'finished' && (
