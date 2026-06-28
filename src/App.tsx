@@ -110,6 +110,21 @@ function createGroups(count: number) {
   }))
 }
 
+function ensureGroupCapacity(groups: Group[], playerCount: number) {
+  const requiredGroups = Math.max(groups.length, Math.ceil(playerCount / 2), 1)
+  const nextGroups = [...groups]
+
+  while (nextGroups.length < requiredGroups) {
+    nextGroups.push({
+      id: uid('group'),
+      name: `Team ${nextGroups.length + 1}`,
+      playerIds: [],
+    })
+  }
+
+  return nextGroups
+}
+
 function createSession(mode: Mode, groupCount: number, hostName: string): Session {
   const createdAt = new Date()
   const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000)
@@ -138,6 +153,63 @@ function createSinglesCompetitors(players: Player[]) {
 function createCompetitorMap(session: Session) {
   const competitors = session.mode === 'singles' ? createSinglesCompetitors(session.players) : session.groups
   return new Map(competitors.map((competitor) => [competitor.id, competitor]))
+}
+
+function skillScore(skill: Skill) {
+  if (skill === 'Advanced') return 3
+  if (skill === 'Moderate') return 2
+  return 1
+}
+
+function createBalancedDoublesGroups(players: Player[], groups: Group[], shouldShuffle = false) {
+  const seededPlayers = players.map((player) => ({
+    player,
+    seed: shouldShuffle ? Math.random() : 0,
+  }))
+  const sortedPlayers = seededPlayers
+    .sort((left, right) => {
+      const skillDelta = skillScore(right.player.skill) - skillScore(left.player.skill)
+      if (skillDelta !== 0) return skillDelta
+      if (left.seed !== right.seed) return left.seed - right.seed
+      return left.player.name.localeCompare(right.player.name)
+    })
+    .map(({ player }) => player)
+
+  const pairings: string[][] = []
+  let left = 0
+  let right = sortedPlayers.length - 1
+
+  while (left <= right) {
+    if (left === right) {
+      pairings.push([sortedPlayers[left].id])
+    } else {
+      pairings.push([sortedPlayers[left].id, sortedPlayers[right].id])
+    }
+    left += 1
+    right -= 1
+  }
+
+  const nextGroups = ensureGroupCapacity(groups, players.length).map((group, index) => ({
+    ...group,
+    playerIds: pairings[index] ?? [],
+  }))
+
+  const groupByPlayerId = new Map<string, string>()
+  nextGroups.forEach((group) => {
+    group.playerIds.forEach((playerId) => groupByPlayerId.set(playerId, group.id))
+  })
+
+  const nextPlayers = players.map((player) => ({
+    ...player,
+    groupId: groupByPlayerId.get(player.id),
+  }))
+
+  return { groups: nextGroups, players: nextPlayers }
+}
+
+function autoAssignDoublesPlayer(session: Session, player: Player) {
+  const players = [...session.players, player]
+  return createBalancedDoublesGroups(players, session.groups)
 }
 
 function buildRoundRobin(groups: Group[]) {
@@ -400,16 +472,31 @@ function App() {
       stats: emptyStats(),
     }
 
-    await updateSession((current) => ({
-      ...current,
-      players: [...current.players, player],
-    }))
+    await updateSession((current) => {
+      if (current.mode === 'doubles') {
+        const assigned = autoAssignDoublesPlayer(current, player)
+        return {
+          ...current,
+          players: assigned.players,
+          groups: assigned.groups,
+        }
+      }
+
+      return {
+        ...current,
+        players: [...current.players, player],
+      }
+    })
     localStorage.setItem(localPlayerKey(session.id), player.id)
     setJoinedPlayerId(player.id)
     setJoinName('')
     setJoinIcon(cuteIcons[0].icon)
     setNoticeTone('info')
-    setNotice('You are in the queue. The host can now assign you to a team.')
+    setNotice(
+      session.mode === 'doubles'
+        ? 'You are in the queue. The system assigned you to a team by default.'
+        : 'You are in the queue.',
+    )
   }
 
   function assignPlayer(playerId: string, groupId: string) {
@@ -520,6 +607,24 @@ function App() {
     })
   }
 
+  function reassignDoublesPartners() {
+    updateSession((current) => {
+      if (current.mode !== 'doubles') return current
+
+      const balanced = createBalancedDoublesGroups(current.players, current.groups, true)
+      const matches = buildRoundRobin(balanced.groups)
+      return {
+        ...current,
+        players: balanced.players,
+        groups: balanced.groups,
+        matches,
+        activeMatchId: matches[0]?.id,
+      }
+    })
+    setNoticeTone('info')
+    setNotice('Doubles partners were reassigned into balanced teams.')
+  }
+
   function finishMatch(matchId: string, winnerId: string) {
     updateSession((current) => {
       const match = current.matches.find((item) => item.id === matchId)
@@ -614,6 +719,17 @@ function App() {
       : joinedPlayer?.groupId
         ? competitorById.get(joinedPlayer.groupId)
         : undefined
+  const eligibleDoublesTeams = session?.groups.filter((group) => group.playerIds.length > 0) ?? []
+  const hasEmptyDoublesTeams = session?.groups.some((group) => group.playerIds.length === 0) ?? false
+  const canGenerateMatches = session
+    ? session.mode === 'singles'
+      ? session.players.length >= 2
+      : eligibleDoublesTeams.length >= 2 && !hasEmptyDoublesTeams
+    : false
+  const generateMatchesReminder =
+    session?.mode === 'singles'
+      ? 'Add at least 2 players before generating matches.'
+      : 'All teams need members before generating matches.'
 
   return (
     <main className="app-shell">
@@ -896,16 +1012,39 @@ function App() {
 
               <div className="main-stack">
                 <div className="toolbar panel">
-                  {session.mode === 'doubles' && (
-                    <button className="secondary-button" type="button" onClick={addGroup}>
-                      <CirclePlus size={16} />
-                      Add team
+                  <div className="toolbar-actions">
+                    {session.mode === 'doubles' && (
+                      <button className="secondary-button" type="button" onClick={addGroup}>
+                        <CirclePlus size={16} />
+                        Add team
+                      </button>
+                    )}
+                    {session.mode === 'doubles' && (
+                      <button
+                        className="secondary-button"
+                        disabled={session.players.length < 2}
+                        type="button"
+                        onClick={reassignDoublesPartners}
+                      >
+                        <Shuffle size={16} />
+                        Reassign partners
+                      </button>
+                    )}
+                    <button
+                      className="primary-button"
+                      disabled={!canGenerateMatches}
+                      type="button"
+                      onClick={generateSchedule}
+                    >
+                      <Shuffle size={16} />
+                      Generate matches
                     </button>
-                  )}
-                  <button className="primary-button" type="button" onClick={generateSchedule}>
-                    <Shuffle size={16} />
-                    Generate round robin
-                  </button>
+                  </div>
+                  <p className={canGenerateMatches ? 'toolbar-reminder ready' : 'toolbar-reminder'}>
+                    {canGenerateMatches
+                      ? 'Ready to generate matches.'
+                      : generateMatchesReminder}
+                  </p>
                 </div>
 
                 {hostWaitingPlayers.length > 0 && (
@@ -1028,7 +1167,7 @@ function App() {
                 <p className="empty">
                   {role === 'join'
                     ? 'No upcoming matches yet.'
-                    : 'Generate a round robin after teams have players.'}
+                    : 'Generate matches after teams have players.'}
                 </p>
               ) : (
                 <div className="match-list">
