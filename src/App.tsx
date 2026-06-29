@@ -8,6 +8,7 @@ import {
   Crown,
   Download,
   History,
+  Pencil,
   QrCode,
   Shuffle,
   Trophy,
@@ -55,6 +56,22 @@ type Match = {
   winnerId?: string
 }
 
+type MatchHistoryPlayer = {
+  id: string
+  name: string
+  skill: Skill
+  icon?: string
+}
+
+type MatchHistoryEntry = Match & {
+  finishedAt: string
+  teamAName: string
+  teamBName: string
+  winnerName: string
+  teamAPlayers: MatchHistoryPlayer[]
+  teamBPlayers: MatchHistoryPlayer[]
+}
+
 type Session = {
   id: string
   hostName: string
@@ -66,6 +83,7 @@ type Session = {
   players: Player[]
   groups: Group[]
   matches: Match[]
+  matchHistory: MatchHistoryEntry[]
   activeMatchId?: string
 }
 
@@ -157,6 +175,7 @@ function createSession(mode: Mode, groupCount: number, courtCount: number, hostN
     players: [],
     groups: mode === 'doubles' ? createGroups(groupCount) : [],
     matches: [],
+    matchHistory: [],
   }
 }
 
@@ -171,6 +190,35 @@ function createSinglesCompetitors(players: Player[]) {
 function createCompetitorMap(session: Session) {
   const competitors = session.mode === 'singles' ? createSinglesCompetitors(session.players) : session.groups
   return new Map(competitors.map((competitor) => [competitor.id, competitor]))
+}
+
+function createMatchHistoryEntry(session: Session, match: Match): MatchHistoryEntry {
+  const competitors = createCompetitorMap(session)
+  const teamA = competitors.get(match.teamAId)
+  const teamB = competitors.get(match.teamBId)
+  const winner = competitors.get(match.winnerId ?? '')
+  const playersById = new Map(session.players.map((player) => [player.id, player]))
+  const createPlayerSnapshot = (playerId: string): MatchHistoryPlayer | undefined => {
+    const player = playersById.get(playerId)
+    return player
+      ? {
+          id: player.id,
+          name: player.name,
+          skill: player.skill,
+          icon: player.icon,
+        }
+      : undefined
+  }
+
+  return {
+    ...match,
+    finishedAt: new Date().toISOString(),
+    teamAName: teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A'),
+    teamBName: teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B'),
+    winnerName: winner?.name ?? 'Winner',
+    teamAPlayers: (teamA?.playerIds ?? []).map(createPlayerSnapshot).filter((player): player is MatchHistoryPlayer => Boolean(player)),
+    teamBPlayers: (teamB?.playerIds ?? []).map(createPlayerSnapshot).filter((player): player is MatchHistoryPlayer => Boolean(player)),
+  }
 }
 
 function createMatchableCompetitors(session: Session) {
@@ -320,19 +368,40 @@ function normalizeSkill(skill: unknown): Skill {
 
 function normalizeSession(session: Session): Session {
   const courtCount = clampCourtCount(session.courtCount ?? 1)
-
-  return {
+  const players = session.players.map((player) => ({
+    ...player,
+    skill: normalizeSkill(player.skill),
+  }))
+  const normalizedSession = {
     ...session,
     courtCount,
+    players,
     matches: assignCourtNumbers(session.matches ?? [], courtCount).map((match, index) => ({
       ...match,
       round: session.matches?.[index]?.round ?? match.round,
       courtNumber: session.matches?.[index]?.courtNumber ?? match.courtNumber,
     })),
-    players: session.players.map((player) => ({
-      ...player,
-      skill: normalizeSkill(player.skill),
+    matchHistory: (session.matchHistory ?? []).map((match) => ({
+      ...match,
+      teamAPlayers: match.teamAPlayers.map((player) => ({
+        ...player,
+        skill: normalizeSkill(player.skill),
+      })),
+      teamBPlayers: match.teamBPlayers.map((player) => ({
+        ...player,
+        skill: normalizeSkill(player.skill),
+      })),
     })),
+  }
+
+  return {
+    ...normalizedSession,
+    matchHistory:
+      normalizedSession.matchHistory.length > 0
+        ? normalizedSession.matchHistory
+        : normalizedSession.matches
+            .filter((match) => match.status === 'finished' && match.winnerId)
+            .map((match) => createMatchHistoryEntry(normalizedSession, match)),
   }
 }
 
@@ -413,6 +482,7 @@ function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [role, setRole] = useState<'host' | 'join'>(initialRole)
   const [hostName, setHostName] = useState('')
+  const [isHostPlaying, setIsHostPlaying] = useState(false)
   const [setupMode, setSetupMode] = useState<Mode>('doubles')
   const [initialGroups, setInitialGroups] = useState(4)
   const [initialCourts, setInitialCourts] = useState(2)
@@ -429,6 +499,7 @@ function App() {
   const [sessionCodeError, setSessionCodeError] = useState('')
   const [dbWarning, setDbWarning] = useState('')
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [editingSkillPlayerId, setEditingSkillPlayerId] = useState('')
   const [isAddPlayerModalOpen, setIsAddPlayerModalOpen] = useState(false)
   const [isAddMatchModalOpen, setIsAddMatchModalOpen] = useState(false)
   const [isMatchHistoryOpen, setIsMatchHistoryOpen] = useState(false)
@@ -475,6 +546,13 @@ function App() {
     const interval = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (!notice) return
+
+    const timeout = window.setTimeout(() => setNotice(''), 3_000)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
 
   useEffect(() => {
     if (!initialSessionId) return
@@ -532,7 +610,33 @@ function App() {
       return
     }
 
-    const next = createSession(setupMode, initialGroups, initialCourts, hostName.trim())
+    const nextHostName = hostName.trim()
+    let next = createSession(setupMode, initialGroups, initialCourts, nextHostName)
+
+    if (isHostPlaying) {
+      const hostPlayer: Player = {
+        id: uid('player'),
+        name: nextHostName,
+        skill: 'Intermediate',
+        icon: cuteIcons[0].icon,
+        stats: emptyStats(),
+      }
+
+      if (next.mode === 'doubles') {
+        const assigned = autoAssignDoublesPlayer(next, hostPlayer)
+        next = {
+          ...next,
+          players: assigned.players,
+          groups: assigned.groups,
+        }
+      } else {
+        next = {
+          ...next,
+          players: [hostPlayer],
+        }
+      }
+    }
+
     setSession(next)
     setRole('host')
     setActiveSessionTab('playerCards')
@@ -700,6 +804,20 @@ function App() {
           : { ...group, playerIds: withoutPlayer }
       }),
     }))
+  }
+
+  function updatePlayerSkill(playerId: string, skill: Skill) {
+    updateSession((current) => ({
+      ...current,
+      players: current.players.map((player) =>
+        player.id === playerId ? { ...player, skill } : player,
+      ),
+    }))
+  }
+
+  function choosePlayerSkill(playerId: string, skill: Skill) {
+    updatePlayerSkill(playerId, skill)
+    setEditingSkillPlayerId('')
   }
 
   function removePlayerFromGroup(playerId: string) {
@@ -928,7 +1046,7 @@ function App() {
       }
     })
     setNoticeTone('info')
-    setNotice('Game removed from the match queue.')
+    setNotice('Game canceled from the match queue.')
   }
 
   function startMatch(matchId: string, actorCompetitorId?: string) {
@@ -995,9 +1113,8 @@ function App() {
         return player
       })
 
-      const matches = current.matches.map((item) =>
-        item.id === matchId ? { ...item, status: 'finished' as const, winnerId } : item,
-      )
+      const finishedMatch = { ...match, status: 'finished' as const, winnerId }
+      const matches = current.matches.map((item) => (item.id === matchId ? finishedMatch : item))
       const nextMatch =
         matches.find((item) => item.status === 'in-progress') ??
         matches.find((item) => item.status === 'queued')
@@ -1006,6 +1123,7 @@ function App() {
         ...current,
         players,
         matches,
+        matchHistory: [...current.matchHistory, createMatchHistoryEntry(current, finishedMatch)],
         activeMatchId: nextMatch?.id,
       }
     })
@@ -1103,9 +1221,20 @@ function App() {
   const hostWaitingPlayers =
     session?.mode === 'singles' ? session.players : session?.players.filter((player) => !player.groupId) ?? []
   const displayedMatches = session?.matches.filter((match) => match.status !== 'finished') ?? []
-  const finishedMatches = session?.matches.filter((match) => match.status === 'finished') ?? []
+  const finishedMatches = session?.matchHistory ?? []
+  const tallyPlayers = useMemo(() => {
+    return [...(session?.players ?? [])].sort((left, right) => {
+      const winDelta = right.stats.wins - left.stats.wins
+      if (winDelta !== 0) return winDelta
+      const playedDelta = right.stats.played - left.stats.played
+      if (playedDelta !== 0) return playedDelta
+      return left.name.localeCompare(right.name)
+    })
+  }, [session?.players])
+  const topTallyWins = tallyPlayers[0]?.stats.wins ?? 0
   const matchableCompetitors = session ? createMatchableCompetitors(session) : []
   const joinedPlayer = joinedPlayerId ? playerById.get(joinedPlayerId) : undefined
+  const editingSkillPlayer = editingSkillPlayerId ? playerById.get(editingSkillPlayerId) : undefined
   const joinedGroup =
     session?.mode === 'singles'
       ? joinedPlayer
@@ -1162,99 +1291,135 @@ function App() {
 
       {!session && (
         <section className="setup-grid">
-          <div className="panel setup-panel">
-            <div className="section-title">
-              <Crown size={22} />
-              <div>
-                <p className="eyebrow">Host mode</p>
-                <h2>Create a session</h2>
+          <div className="panel setup-panel start-panel">
+            <div className="setup-tabs" role="tablist" aria-label="Start mode">
+              <button
+                className={role === 'host' ? 'setup-tab active' : 'setup-tab'}
+                type="button"
+                role="tab"
+                aria-selected={role === 'host'}
+                onClick={() => setRole('host')}
+              >
+                <Crown size={18} />
+                Host mode
+              </button>
+              <button
+                className={role === 'join' ? 'setup-tab active' : 'setup-tab'}
+                type="button"
+                role="tab"
+                aria-selected={role === 'join'}
+                onClick={() => setRole('join')}
+              >
+                <QrCode size={18} />
+                Player mode
+              </button>
+            </div>
+
+            {role === 'host' ? (
+              <div className="setup-tab-panel" role="tabpanel">
+                <div className="section-title">
+                  <Crown size={22} />
+                  <div>
+                    <p className="eyebrow">Host mode</p>
+                    <h2>Create a session</h2>
+                  </div>
+                </div>
+
+                <label className="field">
+                  Host username
+                  <input
+                    placeholder="e.g. Coach Jion"
+                    value={hostName}
+                    onChange={(event) => setHostName(event.target.value)}
+                  />
+                </label>
+
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={isHostPlaying}
+                    onChange={(event) => setIsHostPlaying(event.target.checked)}
+                  />
+                  <span>I'm playing too</span>
+                </label>
+
+                <div className="choice-row">
+                  <button
+                    className={setupMode === 'singles' ? 'choice active' : 'choice'}
+                    type="button"
+                    onClick={() => setSetupMode('singles')}
+                  >
+                    Singles
+                  </button>
+                  <button
+                    className={setupMode === 'doubles' ? 'choice active' : 'choice'}
+                    type="button"
+                    onClick={() => setSetupMode('doubles')}
+                  >
+                    Doubles
+                  </button>
+                </div>
+
+                {setupMode === 'doubles' && (
+                  <label className="field">
+                    Initial number of teams
+                    <input
+                      min={2}
+                      max={16}
+                      type="number"
+                      value={initialGroups}
+                      onChange={(event) => setInitialGroups(Number(event.target.value))}
+                    />
+                  </label>
+                )}
+
+                <label className="field">
+                  Available courts
+                  <input
+                    min={1}
+                    max={12}
+                    type="number"
+                    value={initialCourts}
+                    onChange={(event) => setInitialCourts(clampCourtCount(Number(event.target.value)))}
+                  />
+                </label>
+
+                <button className="primary-button" type="button" onClick={startSession}>
+                  Create session
+                </button>
               </div>
-            </div>
-
-            <label className="field">
-              Host username
-              <input
-                placeholder="e.g. Coach Jion"
-                value={hostName}
-                onChange={(event) => setHostName(event.target.value)}
-              />
-            </label>
-
-            <div className="choice-row">
-              <button
-                className={setupMode === 'singles' ? 'choice active' : 'choice'}
-                type="button"
-                onClick={() => setSetupMode('singles')}
-              >
-                Singles
-              </button>
-              <button
-                className={setupMode === 'doubles' ? 'choice active' : 'choice'}
-                type="button"
-                onClick={() => setSetupMode('doubles')}
-              >
-                Doubles
-              </button>
-            </div>
-
-            {setupMode === 'doubles' && (
-              <label className="field">
-                Initial number of teams
-                <input
-                  min={2}
-                  max={16}
-                  type="number"
-                  value={initialGroups}
-                  onChange={(event) => setInitialGroups(Number(event.target.value))}
-                />
-              </label>
+            ) : (
+              <div className="setup-tab-panel" role="tabpanel">
+                <div className="section-title">
+                  <QrCode size={22} />
+                  <div>
+                    <p className="eyebrow">Player mode</p>
+                    <h2>Join by code</h2>
+                  </div>
+                </div>
+                <label className="field">
+                  Session code
+                  <input
+                    placeholder="ABC123"
+                    value={sessionIdInput}
+                    onChange={(event) => {
+                      setSessionIdInput(event.target.value)
+                      setSessionCodeError('')
+                    }}
+                    aria-invalid={Boolean(sessionCodeError)}
+                    aria-describedby={sessionCodeError ? 'session-code-error' : undefined}
+                  />
+                  {sessionCodeError && (
+                    <p className="field-error" id="session-code-error">
+                      {sessionCodeError}
+                    </p>
+                  )}
+                </label>
+                <button className="secondary-button" type="button" onClick={openSession}>
+                  Open session
+                </button>
+              </div>
             )}
-
-            <label className="field">
-              Available courts
-              <input
-                min={1}
-                max={12}
-                type="number"
-                value={initialCourts}
-                onChange={(event) => setInitialCourts(clampCourtCount(Number(event.target.value)))}
-              />
-            </label>
-
-            <button className="primary-button" type="button" onClick={startSession}>
-              Create session
-            </button>
-          </div>
-
-          <div className="panel setup-panel">
-            <div className="section-title">
-              <QrCode size={22} />
-              <div>
-                <p className="eyebrow">Player mode</p>
-                <h2>Join by code</h2>
-              </div>
-            </div>
-            <label className="field">
-              Session code
-              <input
-                placeholder="ABC123"
-                value={sessionIdInput}
-                onChange={(event) => {
-                  setSessionIdInput(event.target.value)
-                  setSessionCodeError('')
-                }}
-                aria-invalid={Boolean(sessionCodeError)}
-                aria-describedby={sessionCodeError ? 'session-code-error' : undefined}
-              />
-              {sessionCodeError && (
-                <p className="field-error" id="session-code-error">
-                  {sessionCodeError}
-                </p>
-              )}
-            </label>
-            <button className="secondary-button" type="button" onClick={openSession}>
-              Open session
-            </button>
           </div>
         </section>
       )}
@@ -1535,28 +1700,41 @@ function App() {
                             </span>
                             <span>
                               {player.name}
-                              <small>{player.skill}</small>
+                              <small className="skill-line">
+                                {player.skill}
+                                <button
+                                  className="icon-button skill-edit-button"
+                                  type="button"
+                                  aria-label={`Edit skill level for ${player.name}`}
+                                  onClick={() => setEditingSkillPlayerId(player.id)}
+                                >
+                                  <Pencil size={13} />
+                                </button>
+                              </small>
                             </span>
                           </div>
                           {session.mode === 'doubles' && (
-                            <select
-                              value=""
-                              onChange={(event) => assignPlayer(player.id, event.target.value)}
-                            >
-                              <option value="" disabled>
-                                Send to team
-                              </option>
-                              {session.groups.map((group) => (
-                                <option
-                                  disabled={group.playerIds.length >= 2}
-                                  key={group.id}
-                                  value={group.id}
-                                >
-                                  {group.name}
-                                  {group.playerIds.length >= 2 ? ' (full)' : ''}
+                            <div className="roster-actions">
+                              <select
+                                className="move-player-select"
+                                value=""
+                                onChange={(event) => assignPlayer(player.id, event.target.value)}
+                              >
+                                <option value="" disabled>
+                                  Send to team
                                 </option>
-                              ))}
-                            </select>
+                                {session.groups.map((group) => (
+                                  <option
+                                    disabled={group.playerIds.length >= 2}
+                                    key={group.id}
+                                    value={group.id}
+                                  >
+                                    {group.name}
+                                    {group.playerIds.length >= 2 ? ' (full)' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
                           )}
                         </div>
                       ))}
@@ -1610,7 +1788,17 @@ function App() {
                                     </span>
                                     <span>
                                       <strong>{player.name}</strong>
-                                      <small>{player.skill}</small>
+                                      <small className="skill-line">
+                                        {player.skill}
+                                        <button
+                                          className="icon-button skill-edit-button"
+                                          type="button"
+                                          aria-label={`Edit skill level for ${player.name}`}
+                                          onClick={() => setEditingSkillPlayerId(player.id)}
+                                        >
+                                          <Pencil size={13} />
+                                        </button>
+                                      </small>
                                     </span>
                                   </div>
                                   <div className="roster-actions">
@@ -1768,7 +1956,7 @@ function App() {
                               type="button"
                               onClick={() => removeQueuedMatch(match.id)}
                             >
-                              Remove game
+                              Cancel game
                             </button>
                           </div>
                         )}
@@ -1827,25 +2015,37 @@ function App() {
                 </div>
               </div>
               <div className="stats-list">
-                {session.players.length === 0 && <p className="empty">Players will appear here after joining.</p>}
-                {session.players.map((player) => (
-                  <div className="stat-row" key={player.id}>
-                    <div className="player-identity">
-                      <span className="player-icon" aria-hidden="true">
-                        {player.icon ?? '🐼'}
-                      </span>
-                      <span>
-                        <strong>{player.name}</strong>
-                        <small>{player.skill}</small>
-                      </span>
+                {tallyPlayers.length === 0 && (
+                  <p className="empty">Players will appear here after joining.</p>
+                )}
+                {tallyPlayers.map((player) => {
+                  const isTopScorer = topTallyWins > 0 && player.stats.wins === topTallyWins
+
+                  return (
+                    <div className={isTopScorer ? 'stat-row top-scorer' : 'stat-row'} key={player.id}>
+                      <div className="player-identity">
+                        <span className="player-icon" aria-hidden="true">
+                          {player.icon ?? '🐼'}
+                        </span>
+                        <span>
+                          <strong>{player.name}</strong>
+                          <small>{player.skill}</small>
+                          {isTopScorer && (
+                            <span className="top-scorer-badge">
+                              <Crown size={12} />
+                              Top scorer
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="stat-pills">
+                        <span className="stat-pill games">{player.stats.played} Games</span>
+                        <span className="stat-pill wins">{player.stats.wins} W</span>
+                        <span className="stat-pill losses">{player.stats.losses} L</span>
+                      </div>
                     </div>
-                    <div className="stat-pills">
-                      <span className="stat-pill games">{player.stats.played} Games</span>
-                      <span className="stat-pill wins">{player.stats.wins} W</span>
-                      <span className="stat-pill losses">{player.stats.losses} L</span>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
             )}
@@ -1883,6 +2083,44 @@ function App() {
             </footer>
           )}
         </section>
+      )}
+      {editingSkillPlayer && session && role === 'host' && (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            aria-describedby="edit-skill-description"
+            aria-labelledby="edit-skill-title"
+            aria-modal="true"
+            className="confirmation-modal"
+            role="dialog"
+          >
+            <div>
+              <p className="eyebrow">Player skill</p>
+              <h2 id="edit-skill-title">Edit {editingSkillPlayer.name}</h2>
+            </div>
+            <p id="edit-skill-description">Choose the skill level for this player.</p>
+            <div className="skill-options">
+              {skills.map((skill) => (
+                <button
+                  className={editingSkillPlayer.skill === skill ? 'choice active' : 'choice'}
+                  key={skill}
+                  type="button"
+                  onClick={() => choosePlayerSkill(editingSkillPlayer.id, skill)}
+                >
+                  {skill}
+                </button>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setEditingSkillPlayerId('')}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {isAddPlayerModalOpen && session && role === 'host' && (
         <div className="modal-backdrop" role="presentation">
@@ -1982,18 +2220,7 @@ function App() {
               <p className="empty">Finished games will appear here after a winner is selected.</p>
             ) : (
               <div className="history-list">
-                {finishedMatches.map((match) => {
-                  const teamA = competitorById.get(match.teamAId)
-                  const teamB = competitorById.get(match.teamBId)
-                  const winner = competitorById.get(match.winnerId ?? '')
-                  const teamAPlayers = (teamA?.playerIds ?? [])
-                    .map((playerId) => playerById.get(playerId))
-                    .filter((player): player is Player => Boolean(player))
-                  const teamBPlayers = (teamB?.playerIds ?? [])
-                    .map((playerId) => playerById.get(playerId))
-                    .filter((player): player is Player => Boolean(player))
-
-                  return (
+                {finishedMatches.map((match) => (
                     <article className="history-card" key={match.id}>
                       <div className="match-labels">
                         <span className="round-label">Game {match.round}</span>
@@ -2001,21 +2228,20 @@ function App() {
                       </div>
                       <div className="history-matchup">
                         <strong>
-                          {teamA?.name ?? (session.mode === 'singles' ? 'Player A' : 'Team A')} vs{' '}
-                          {teamB?.name ?? (session.mode === 'singles' ? 'Player B' : 'Team B')}
+                          {match.teamAName} vs {match.teamBName}
                         </strong>
                         <span className="winner">
                           <CheckCircle2 size={15} />
-                          {winner?.name ?? 'Winner'} won
+                          {match.winnerName} won
                         </span>
                       </div>
                       <div className="history-rosters">
                         <div>
-                          <p>{teamA?.name ?? 'Team A'}</p>
-                          {teamAPlayers.length === 0 ? (
+                          <p>{match.teamAName}</p>
+                          {match.teamAPlayers.length === 0 ? (
                             <small>No players listed</small>
                           ) : (
-                            teamAPlayers.map((player) => (
+                            match.teamAPlayers.map((player) => (
                               <span className="history-player" key={player.id}>
                                 <span aria-hidden="true">{player.icon ?? '🐼'}</span>
                                 {player.name}
@@ -2024,11 +2250,11 @@ function App() {
                           )}
                         </div>
                         <div>
-                          <p>{teamB?.name ?? 'Team B'}</p>
-                          {teamBPlayers.length === 0 ? (
+                          <p>{match.teamBName}</p>
+                          {match.teamBPlayers.length === 0 ? (
                             <small>No players listed</small>
                           ) : (
-                            teamBPlayers.map((player) => (
+                            match.teamBPlayers.map((player) => (
                               <span className="history-player" key={player.id}>
                                 <span aria-hidden="true">{player.icon ?? '🐼'}</span>
                                 {player.name}
@@ -2038,8 +2264,7 @@ function App() {
                         </div>
                       </div>
                     </article>
-                  )
-                })}
+                ))}
               </div>
             )}
             <div className="modal-actions">
