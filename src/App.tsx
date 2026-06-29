@@ -420,12 +420,16 @@ function App() {
   const [joinName, setJoinName] = useState('')
   const [joinSkill, setJoinSkill] = useState<Skill>('Intermediate')
   const [joinIcon, setJoinIcon] = useState(cuteIcons[0].icon)
+  const [hostPlayerName, setHostPlayerName] = useState('')
+  const [hostPlayerSkill, setHostPlayerSkill] = useState<Skill>('Intermediate')
+  const [hostPlayerIcon, setHostPlayerIcon] = useState(cuteIcons[0].icon)
   const [joinedPlayerId, setJoinedPlayerId] = useState('')
   const [notice, setNotice] = useState('')
   const [noticeTone, setNoticeTone] = useState<'info' | 'error'>('info')
   const [sessionCodeError, setSessionCodeError] = useState('')
   const [dbWarning, setDbWarning] = useState('')
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [isAddPlayerModalOpen, setIsAddPlayerModalOpen] = useState(false)
   const [isAddMatchModalOpen, setIsAddMatchModalOpen] = useState(false)
   const [isMatchHistoryOpen, setIsMatchHistoryOpen] = useState(false)
   const [activeSessionTab, setActiveSessionTab] = useState<SessionTab>(
@@ -621,6 +625,53 @@ function App() {
       session.mode === 'doubles'
         ? 'You are in the queue. The system assigned you to a team by default.'
         : 'You are in the queue.',
+    )
+  }
+
+  async function addHostPlayer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!session || role !== 'host' || isClosed) return
+
+    const playerName = hostPlayerName.trim()
+    if (!playerName) {
+      setNoticeTone('error')
+      setNotice('Add a player name before adding them to the queue.')
+      return
+    }
+
+    const player: Player = {
+      id: uid('player'),
+      name: playerName,
+      skill: hostPlayerSkill,
+      icon: hostPlayerIcon,
+      stats: emptyStats(),
+    }
+
+    await updateSession((current) => {
+      if (current.mode === 'doubles') {
+        const assigned = autoAssignDoublesPlayer(current, player)
+        return {
+          ...current,
+          players: assigned.players,
+          groups: assigned.groups,
+        }
+      }
+
+      return {
+        ...current,
+        players: [...current.players, player],
+      }
+    })
+
+    setHostPlayerName('')
+    setHostPlayerSkill('Intermediate')
+    setHostPlayerIcon(cuteIcons[0].icon)
+    setIsAddPlayerModalOpen(false)
+    setNoticeTone('info')
+    setNotice(
+      session.mode === 'doubles'
+        ? `${player.name} was added and assigned to a team.`
+        : `${player.name} was added to the queue.`,
     )
   }
 
@@ -1444,25 +1495,25 @@ function App() {
               </aside>
 
               <div className="main-stack">
-                {session.mode === 'doubles' && (
-                  <div className="toolbar panel">
-                    <div className="toolbar-actions">
+                <div className="toolbar panel">
+                  <div className="toolbar-actions">
+                    <button
+                      className="primary-button"
+                      disabled={isClosed}
+                      type="button"
+                      onClick={() => setIsAddPlayerModalOpen(true)}
+                    >
+                      <UserPlus size={16} />
+                      Add player
+                    </button>
+                    {session.mode === 'doubles' && (
                       <button className="secondary-button" type="button" onClick={addGroup}>
                         <CirclePlus size={16} />
                         Add team
                       </button>
-                      <button
-                        className="secondary-button"
-                        disabled={session.players.length < 2}
-                        type="button"
-                        onClick={reassignDoublesPartners}
-                      >
-                        <Shuffle size={16} />
-                        Reassign partners
-                      </button>
+                    )}
                     </div>
                   </div>
-                )}
 
                 {hostWaitingPlayers.length > 0 && (
                   <div className="panel">
@@ -1514,9 +1565,23 @@ function App() {
                 )}
 
                 {session.mode === 'doubles' && (
-                  <div className="teams-grid">
-                    {session.groups.map((group) => (
-                      <details className="team-card team-accordion" key={group.id}>
+                  <>
+                    <div className="toolbar panel">
+                      <div className="toolbar-actions">
+                        <button
+                          className="secondary-button"
+                          disabled={session.players.length < 2}
+                          type="button"
+                          onClick={reassignDoublesPartners}
+                        >
+                          <Shuffle size={16} />
+                          Shuffle team players
+                        </button>
+                      </div>
+                    </div>
+                    <div className="teams-grid">
+                      {session.groups.map((group) => (
+                        <details className="team-card team-accordion" key={group.id}>
                         <summary className="team-summary">
                           <span>{group.name}</span>
                           <span className="team-count">
@@ -1589,6 +1654,7 @@ function App() {
                       </details>
                     ))}
                   </div>
+                  </>
                 )}
               </div>
             </div>
@@ -1817,6 +1883,84 @@ function App() {
             </footer>
           )}
         </section>
+      )}
+      {isAddPlayerModalOpen && session && role === 'host' && (
+        <div className="modal-backdrop" role="presentation">
+          <form
+            aria-describedby="add-player-description"
+            aria-labelledby="add-player-title"
+            aria-modal="true"
+            className="confirmation-modal add-player-modal"
+            role="dialog"
+            onSubmit={addHostPlayer}
+          >
+            <div>
+              <p className="eyebrow">Host add</p>
+              <h2 id="add-player-title">Add a player</h2>
+            </div>
+            <p id="add-player-description">
+              Add someone manually if they cannot scan the QR code or join from their device.
+            </p>
+            <div className="add-player-form">
+              <label className="field">
+                Player name
+                <input
+                  autoFocus
+                  maxLength={48}
+                  placeholder="e.g. Kai"
+                  value={hostPlayerName}
+                  onChange={(event) => setHostPlayerName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                Skill level
+                <select
+                  value={hostPlayerSkill}
+                  onChange={(event) => setHostPlayerSkill(event.target.value as Skill)}
+                >
+                  {skills.map((skill) => (
+                    <option key={skill} value={skill}>
+                      {skill}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="field icon-picker-field">
+                Choose an icon
+                <div className="icon-picker" role="radiogroup" aria-label="Choose player icon">
+                  {cuteIcons.map((item) => (
+                    <button
+                      className={
+                        hostPlayerIcon === item.icon ? 'player-icon-choice active' : 'player-icon-choice'
+                      }
+                      key={item.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={hostPlayerIcon === item.icon}
+                      aria-label={item.label}
+                      title={item.label}
+                      onClick={() => setHostPlayerIcon(item.icon)}
+                    >
+                      {item.icon}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setIsAddPlayerModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button className="primary-button" disabled={!hostPlayerName.trim()} type="submit">
+                Add player
+              </button>
+            </div>
+          </form>
+        </div>
       )}
       {isMatchHistoryOpen && session && (
         <div className="modal-backdrop" role="presentation">

@@ -249,12 +249,17 @@
   justify-content: flex-end;
 }
 
-.add-match-form {
+.add-match-form,
+.add-player-form {
   display: grid;
   gap: 12px;
   padding: 12px;
   border-radius: 18px;
   background: #f6f8ff;
+}
+
+.add-player-form .icon-picker-field {
+  grid-column: auto;
 }
 
 .toolbar-reminder {
